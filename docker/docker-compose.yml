@@ -1,0 +1,14 @@
+services:
+  bot:
+    build:
+      context: ../bot
+      dockerfile: ../docker/DOCKERFILE
+    env_file:
+      - ../bot/.env
+    volumes:
+      - ../bot:/app
+    networks:
+      - app-network
+
+networks:
+  app-network:
