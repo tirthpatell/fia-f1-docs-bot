@@ -7,7 +7,6 @@ import (
 
 	"bot/pkg/config"
 	"bot/pkg/poster"
-	"bot/pkg/processor"
 	"bot/pkg/scraper"
 	"bot/pkg/storage"
 	"bot/pkg/utils"
@@ -42,7 +41,6 @@ func main() {
 	}
 
 	scraper := scraper.New(cfg.FIAUrl)
-	processor := processor.New(cfg.ConversionServiceURL)
 	poster := poster.New(cfg.ThreadsAccessToken, cfg.ThreadsUserID, cfg.ImgurClientID)
 
 	for {
@@ -74,8 +72,8 @@ func main() {
 			}
 			log.Printf("Downloaded PDF: %s", pdfPath)
 
-			// Process the new document
-			images, err := processor.ConvertToImages(pdfPath)
+			// Convert the PDF to images
+			images, err := utils.ConvertToImages(pdfPath)
 			if err != nil {
 				log.Printf("Error processing document: %v", err)
 				time.Sleep(time.Duration(cfg.ScrapeInterval) * time.Second)

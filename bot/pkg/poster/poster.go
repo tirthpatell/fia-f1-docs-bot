@@ -112,9 +112,8 @@ func (p *Poster) postCarousel(imageURLs []string, postText string) error {
 		return fmt.Errorf("failed to create carousel container: %v", err)
 	}
 
-	// Wait for 30 seconds as recommended by the API documentation
-	log.Println("Waiting 30 seconds before publishing...")
-	time.Sleep(30 * time.Second)
+	log.Println("Waiting 5 seconds before publishing...")
+	time.Sleep(5 * time.Second)
 
 	// Publish the carousel
 	return p.publishCarousel(carouselID)
