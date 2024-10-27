@@ -11,6 +11,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strings"
+
+	"github.com/gen2brain/go-fitz"
 )
 
 const imgurAPIURL = "https://api.imgur.com/3/image"
@@ -135,4 +137,25 @@ func RefreshToken(refreshToken string) (string, error) {
 	}
 
 	return tokenResp.AccessToken, nil
+}
+
+// ConvertToImages converts a PDF document to a slice of images
+func ConvertToImages(pdfPath string) ([]image.Image, error) {
+	doc, err := fitz.New(pdfPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open PDF: %v", err)
+	}
+	defer doc.Close()
+
+	var images []image.Image
+
+	for i := 0; i < doc.NumPage(); i++ {
+		img, err := doc.Image(i)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert page %d to image: %v", i, err)
+		}
+		images = append(images, img)
+	}
+
+	return images, nil
 }

@@ -8,13 +8,12 @@ import (
 
 // Config represents the configuration of the bot.
 type Config struct {
-	Document             string `mapstructure:"DOCUMENT"`
-	FIAUrl               string `mapstructure:"FIA_URL"`
-	ThreadsAccessToken   string `mapstructure:"THREADS_ACCESS_TOKEN"`
-	ThreadsUserID        string `mapstructure:"THREADS_USER_ID"`
-	ImgurClientID        string `mapstructure:"IMGUR_CLIENT_ID"`
-	ScrapeInterval       int    `mapstructure:"SCRAPE_INTERVAL"`
-	ConversionServiceURL string `mapstructure:"CONVERSION_SERVICE_URL"`
+	Document           string `mapstructure:"DOCUMENT"`
+	FIAUrl             string `mapstructure:"FIA_URL"`
+	ThreadsAccessToken string `mapstructure:"THREADS_ACCESS_TOKEN"`
+	ThreadsUserID      string `mapstructure:"THREADS_USER_ID"`
+	ImgurClientID      string `mapstructure:"IMGUR_CLIENT_ID"`
+	ScrapeInterval     int    `mapstructure:"SCRAPE_INTERVAL"`
 }
 
 // Load loads the configuration from environment variables and .env file.
@@ -45,9 +44,6 @@ func Load() (*Config, error) {
 	}
 	if cfg.ImgurClientID == "" {
 		return nil, fmt.Errorf("IMGUR_CLIENT_ID is required")
-	}
-	if cfg.ConversionServiceURL == "" {
-		return nil, fmt.Errorf("CONVERSION_SERVICE_URL is required")
 	}
 
 	return &cfg, nil

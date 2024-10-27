@@ -21,7 +21,7 @@ This bot aims to make FIA F1 decision documents more accessible by automatically
 ## How It Works
 
 1. **Scraping**: The bot scrapes the FIA website at a user-defined interval to check for new decision documents.
-2. **Processing**: New documents are converted to images.
+2. **Processing**: New documents are converted to images and uploaded to Imgur to get public URLs.
 3. **Posting**: The bot automatically posts the images to the configured Threads account.
 
 ## Requirements
@@ -46,7 +46,6 @@ This bot aims to make FIA F1 decision documents more accessible by automatically
    SCRAPE_INTERVAL=300
    THREADS_USER_ID=your_threads_user_id_here
    THREADS_ACCESS_TOKEN=your_threads_access_token_here
-   CONVERSION_SERVICE_URL="YOUR_CONVERSION_SERVICE_URL" # http://localhost:8080/convert - Used to convert downloaded pdf into images - I use self-hosted https://github.com/danvergara/morphos
    ```
 
 3. Create a `docker-compose.yml` file:
