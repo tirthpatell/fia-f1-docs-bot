@@ -46,8 +46,6 @@ func (p *Poster) Post(images []image.Image, title string, publishTime time.Time,
 	// Format the text for the post
 	postText := formatPostText(title, publishTime, documentURL, aiSummary)
 
-	fmt.Println("Character count:", len(postText))
-
 	// Determine whether to post a single image or a carousel based on the number of images
 	if len(imageURLs) == 1 {
 		// Single image post
