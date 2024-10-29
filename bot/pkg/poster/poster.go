@@ -14,6 +14,11 @@ import (
 	"bot/pkg/utils"
 )
 
+const (
+	maxCharacterLimit = 500
+	ellipsis          = "..."
+)
+
 // Poster is a struct that holds the configuration for the poster
 type Poster struct {
 	AccessToken string
@@ -31,7 +36,7 @@ func New(accessToken, userID, imgurClientID string) *Poster {
 }
 
 // Post posts the images to Threads
-func (p *Poster) Post(images []image.Image, title string, publishTime time.Time, documentURL string) error {
+func (p *Poster) Post(images []image.Image, title string, publishTime time.Time, documentURL, aiSummary string) error {
 	// Upload images to Imgur
 	imageURLs, err := p.uploadImages(images, title)
 	if err != nil {
@@ -39,7 +44,9 @@ func (p *Poster) Post(images []image.Image, title string, publishTime time.Time,
 	}
 
 	// Format the text for the post
-	postText := formatPostText(title, publishTime, documentURL)
+	postText := formatPostText(title, publishTime, documentURL, aiSummary)
+
+	fmt.Println("Character count:", len(postText))
 
 	// Determine whether to post a single image or a carousel based on the number of images
 	if len(imageURLs) == 1 {
@@ -120,7 +127,7 @@ func (p *Poster) postCarousel(imageURLs []string, postText string) error {
 }
 
 // formatPostText formats the text for the post
-func formatPostText(title string, publishTime time.Time, documentURL string) string {
+func formatPostText(title string, publishTime time.Time, documentURL, aiSummary string) string {
 	// Ensure the URL starts with "https://"
 	if !strings.HasPrefix(documentURL, "https://") && !strings.HasPrefix(documentURL, "http://") {
 		documentURL = "https://" + documentURL
@@ -129,8 +136,42 @@ func formatPostText(title string, publishTime time.Time, documentURL string) str
 	// Escape the URL
 	escapedURL := url.QueryEscape(documentURL)
 
-	return fmt.Sprintf("New document: %s\nPublished on: %s\n\nLink to document: %s\n\n#F1Threads",
+	// Create the base text without the AI summary
+	baseText := fmt.Sprintf("New document: %s\nPublished on: %s\n\nLink to document: %s\n\nAI Summary: ",
 		title, publishTime.Format("02-01-2006 15:04 MST"), escapedURL)
+
+	// Calculate remaining characters for the AI summary
+	suffix := "\n\n#F1Threads"
+	remainingChars := maxCharacterLimit - len(baseText) - len(suffix)
+
+	// Truncate AI summary if needed
+	truncatedSummary := truncateText(aiSummary, remainingChars)
+
+	// Combine all parts
+	return baseText + truncatedSummary + suffix
+}
+
+// truncateText truncates the text to fit within the given character limit
+// and adds ellipsis if truncation occurred
+func truncateText(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+
+	// Reserve space for ellipsis
+	limit -= len(ellipsis)
+	if limit <= 0 {
+		return ""
+	}
+
+	// Find the last space before the limit to avoid cutting words in the middle
+	lastSpace := strings.LastIndex(text[:limit], " ")
+	if lastSpace == -1 {
+		// If no space found, just cut at the limit
+		return text[:limit] + ellipsis
+	}
+
+	return text[:lastSpace] + ellipsis
 }
 
 // createItemContainer creates an item container for the image

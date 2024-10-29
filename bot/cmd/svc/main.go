@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"bot/pkg/poster"
 	"bot/pkg/scraper"
 	"bot/pkg/storage"
+	"bot/pkg/summary"
 	"bot/pkg/utils"
 )
 
@@ -40,6 +42,14 @@ func main() {
 		log.Fatalf("Failed to initialize storage: %v", err)
 	}
 
+	// Initialize the packages
+	summarizer, err := summary.New(summary.Config{
+		APIKey: cfg.GeminiAPIKey,
+	})
+	if err != nil {
+		log.Printf("Failed to initialize summarizer: %v", err)
+	}
+	defer summarizer.Close()
 	scraper := scraper.New(cfg.FIAUrl)
 	poster := poster.New(cfg.ThreadsAccessToken, cfg.ThreadsUserID, cfg.ImgurClientID)
 
@@ -72,6 +82,13 @@ func main() {
 			}
 			log.Printf("Downloaded PDF: %s", pdfPath)
 
+			// Generate AI summary of the document by calling Gemini
+			aiSummary, err := summarizer.GenerateSummary(context.Background(), pdfPath)
+			if err != nil {
+				log.Printf("Error generating summary: %v", err)
+				// Continue with posting even if summary generation fails
+			}
+
 			// Convert the PDF to images
 			images, err := utils.ConvertToImages(pdfPath)
 			if err != nil {
@@ -103,7 +120,7 @@ func main() {
 			fmt.Println("Document URL:", documentURL)
 
 			// Attempt to post with the new format
-			err = poster.Post(images, latestDoc.Title, latestDoc.Published, documentURL)
+			err = poster.Post(images, latestDoc.Title, latestDoc.Published, documentURL, aiSummary)
 			if err != nil {
 				log.Printf("Error posting to Threads: %v", err)
 			} else {

@@ -2,7 +2,7 @@
 
 # FIA F1 Docs Bot
 
-The FIA F1 Docs Bot is an automated tool designed to fetch the latest Formula 1 decision documents from the FIA website and post them on a Threads account.
+The FIA F1 Docs Bot is an automated tool designed to fetch the latest Formula 1 decision documents from the FIA website and post them on a Threads account with AI summarization.
 
 ## ⚠️ Disclaimer
 
@@ -10,7 +10,7 @@ The FIA F1 Docs Bot is an automated tool designed to fetch the latest Formula 1 
 
 ## About
 
-This bot aims to make FIA F1 decision documents more accessible by automatically posting them to a Threads account. It's designed for F1 fans and professionals who want quick access to official FIA communications.
+This bot aims to make FIA F1 decision documents more accessible by automatically posting them to a Threads account with AI summarization. It's designed for F1 fans and professionals who want quick access to official FIA communications.
 
 ## Features
 
@@ -30,6 +30,7 @@ This bot aims to make FIA F1 decision documents more accessible by automatically
 - Go 1.22+ (for local development)
 - Threads API access (see Limitations section)
 - Imgur account for image hosting
+- Google Gemini API for AI summarization (Can be skipped if not needed)
 
 ## Quick Start with Docker
 
@@ -46,6 +47,7 @@ This bot aims to make FIA F1 decision documents more accessible by automatically
    SCRAPE_INTERVAL=300
    THREADS_USER_ID=your_threads_user_id_here
    THREADS_ACCESS_TOKEN=your_threads_access_token_here
+   GEMINI_API_KEY=your_google_gemini_api_key_here
    ```
 
 3. Create a `docker-compose.yml` file:
