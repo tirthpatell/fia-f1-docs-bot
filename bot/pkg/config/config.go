@@ -14,6 +14,7 @@ type Config struct {
 	ThreadsUserID      string `mapstructure:"THREADS_USER_ID"`
 	ImgurClientID      string `mapstructure:"IMGUR_CLIENT_ID"`
 	ScrapeInterval     int    `mapstructure:"SCRAPE_INTERVAL"`
+	GeminiAPIKey       string `mapstructure:"GEMINI_API_KEY"`
 }
 
 // Load loads the configuration from environment variables and .env file.
@@ -44,6 +45,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.ImgurClientID == "" {
 		return nil, fmt.Errorf("IMGUR_CLIENT_ID is required")
+	}
+	if cfg.GeminiAPIKey == "" {
+		return nil, fmt.Errorf("GEMINI_API_KEY is required")
 	}
 
 	return &cfg, nil
