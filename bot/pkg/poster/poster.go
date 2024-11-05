@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -45,6 +44,8 @@ func (p *Poster) Post(images []image.Image, title string, publishTime time.Time,
 
 	// Format the text for the post
 	postText := formatPostText(title, publishTime, documentURL, aiSummary)
+
+	log.Printf("char count: %v", len(postText))
 
 	// Determine whether to post a single image or a carousel based on the number of images
 	if len(imageURLs) == 1 {
@@ -89,9 +90,8 @@ func (p *Poster) postSingleImage(imageURL, postText string) error {
 		return fmt.Errorf("failed to create media container: %v", err)
 	}
 
-	// Wait for 30 seconds as recommended by the API documentation
-	log.Println("Waiting 30 seconds before publishing...")
-	time.Sleep(30 * time.Second)
+	log.Println("Waiting 5 seconds before publishing...")
+	time.Sleep(5 * time.Second)
 
 	// Publish the media
 	return p.publishMedia(mediaID)
@@ -126,17 +126,11 @@ func (p *Poster) postCarousel(imageURLs []string, postText string) error {
 
 // formatPostText formats the text for the post
 func formatPostText(title string, publishTime time.Time, documentURL, aiSummary string) string {
-	// Ensure the URL starts with "https://"
-	if !strings.HasPrefix(documentURL, "https://") && !strings.HasPrefix(documentURL, "http://") {
-		documentURL = "https://" + documentURL
-	}
-
-	// Escape the URL
-	escapedURL := url.QueryEscape(documentURL)
+	_ = documentURL
 
 	// Create the base text without the AI summary
-	baseText := fmt.Sprintf("New document: %s\nPublished on: %s\n\nLink to document: %s\n\nAI Summary: ",
-		title, publishTime.Format("02-01-2006 15:04 MST"), escapedURL)
+	baseText := fmt.Sprintf("New document: %s\nPublished on: %s\n\nAI Summary: ",
+		title, publishTime.Format("02-01-2006 15:04 MST"))
 
 	// Calculate remaining characters for the AI summary
 	suffix := "\n\n#F1Threads"

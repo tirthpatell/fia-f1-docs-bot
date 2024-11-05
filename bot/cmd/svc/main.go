@@ -105,17 +105,8 @@ func main() {
 				log.Printf("Error updating storage: %v", err)
 			}
 
-			// Ensure we have the full document URL and properly encode it
-			documentURL := latestDoc.URL
-			if documentURL == "" {
-				// If URL is not available in latestDoc, construct it
-				baseURL := "https://www.fia.com/sites/default/files/decision-document/"
-				encodedTitle := utils.EncodeURL(latestDoc.Title + ".pdf")
-				documentURL = baseURL + encodedTitle
-			} else {
-				// If we already have a URL, ensure spaces are encoded
-				documentURL = utils.EncodeURL(documentURL)
-			}
+			// Ensure that URL is properly encoded
+			documentURL := utils.EncodeURL(latestDoc.URL)
 
 			fmt.Println("Document URL:", documentURL)
 

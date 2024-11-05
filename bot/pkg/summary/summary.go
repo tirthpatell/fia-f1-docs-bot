@@ -101,7 +101,7 @@ func configureModel(model *genai.GenerativeModel) {
 	model.ResponseMIMEType = "text/plain"
 	model.SystemInstruction = &genai.Content{
 		Parts: []genai.Part{
-			genai.Text("You are a helpful assistant, based on the attached document provide a good summary in 20-25 words, focus for specific action taken or decision taken and use that to create this summary. For exmple, it might mention some form of penalty given to a driver or a team, or a new regulation that has been introduced. Or that no action was taken. Focus on such words and use them to provide this summary."),
+			genai.Text("You are a helpful assistant, based on the attached document provide a good summary in 50-60 words, focus for specific action taken or decision taken and use that to create this summary. For exmple, it might mention some form of penalty given to a driver or a team, or a new rules changes. Or that no action was taken. Focus on such words and use them to provide this summary."),
 		},
 	}
 }
