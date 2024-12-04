@@ -26,7 +26,7 @@ func New(cfg Config) (*Summarizer, error) {
 		return nil, fmt.Errorf("error creating Gemini client: %w", err)
 	}
 
-	model := client.GenerativeModel("gemini-1.5-flash")
+	model := client.GenerativeModel("gemini-exp-1121")
 	configureModel(model)
 
 	return &Summarizer{
@@ -101,7 +101,7 @@ func configureModel(model *genai.GenerativeModel) {
 	model.ResponseMIMEType = "text/plain"
 	model.SystemInstruction = &genai.Content{
 		Parts: []genai.Part{
-			genai.Text("You are a helpful assistant, based on the attached document provide a good summary in 50-60 words, focus for specific action taken or decision taken and use that to create this summary. For exmple, it might mention some form of penalty given to a driver or a team, or a new rules changes. Or that no action was taken. Focus on such words and use them to provide this summary."),
+			genai.Text("You are a concise and focused assistant. Based on the attached document, generate a 40-50 word summary emphasizing specific actions or decisions, such as penalties issued, rule changes, or instances where no action was taken, but only when there was some incident and it specifically mentions no penalty given. Prioritize clarity and relevance to highlight key outcomes. Provide only the summary without any additional explanation or commentary."),
 		},
 	}
 }
