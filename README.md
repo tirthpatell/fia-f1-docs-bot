@@ -44,7 +44,7 @@ This bot aims to make FIA F1 decision documents more accessible by automatically
 2. Create a `.env` file with the following variables:
    ```
    DOCUMENT=file.json
-   FIA_URL=https://www.fia.com/documents/championships/fia-formula-one-world-championship-14/season/season-2024-2043
+   FIA_URL=https://www.fia.com/documents/championships/fia-formula-one-world-championship-14/season/season-2025-2071
    SCRAPE_INTERVAL=300
    THREADS_USER_ID=your_threads_user_id_here
    THREADS_ACCESS_TOKEN=your_threads_access_token_here
