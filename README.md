@@ -16,21 +16,23 @@ This bot aims to make FIA F1 decision documents more accessible by automatically
 
 - **Automated Scraping**: Periodically scrapes the FIA website for the latest decision documents.
 - **Automated Posting**: Posts the fetched documents to a specified Threads account.
+- **AI Summarization**: Uses Google Gemini to generate concise summaries of each document.
 - **Docker Support**: Easily deployable using Docker for consistent environments.
 
 ## How It Works
 
 1. **Scraping**: The bot scrapes the FIA website at a user-defined interval to check for new decision documents.
-2. **Processing**: New documents are converted to images and uploaded to Imgur to get public URLs.
-3. **Posting**: The bot automatically posts the images to the configured Threads account.
+2. **Processing**: New documents are converted to images and summarized using Google Gemini API.
+3. **Image Hosting**: Images are uploaded to a Picsur instance to get public URLs.
+4. **Posting**: The bot automatically posts the images with AI summaries to the configured Threads account.
 
 ## Requirements
 
 - Docker and Docker Compose (for containerized deployment)
-- Go 1.22+ (for local development)
+- Go 1.23+ (for local development)
 - Threads API access (see Limitations section)
-- Imgur account for image hosting
 - Google Gemini API for AI summarization (Can be skipped if not needed)
+- Picsur instance for image hosting (self-hosted or third-party)
 
 ## Quick Start with Docker
 
@@ -41,13 +43,14 @@ This bot aims to make FIA F1 decision documents more accessible by automatically
 
 2. Create a `.env` file with the following variables:
    ```
-   FIA_URL=https://www.fia.com/documents/championships/fia-formula-one-world-championship-14/season/season-2024-2043
    DOCUMENT=file.json
-   IMGUR_CLIENT_ID=your_imgur_client_id_here
+   FIA_URL=https://www.fia.com/documents/championships/fia-formula-one-world-championship-14/season/season-2024-2043
    SCRAPE_INTERVAL=300
    THREADS_USER_ID=your_threads_user_id_here
    THREADS_ACCESS_TOKEN=your_threads_access_token_here
    GEMINI_API_KEY=your_google_gemini_api_key_here
+   PICSUR_API=your_picsur_api_key_here
+   PICSUR_URL=https://picsur.example.com
    ```
 
 3. Create a `docker-compose.yml` file:
