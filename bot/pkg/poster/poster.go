@@ -20,17 +20,17 @@ const (
 
 // Poster is a struct that holds the configuration for the poster
 type Poster struct {
-	AccessToken string
-	UserID      string
-	ImgurClient *utils.Client
+	AccessToken  string
+	UserID       string
+	PicsurClient *utils.Client
 }
 
 // New creates a new Poster
-func New(accessToken, userID, imgurClientID string) *Poster {
+func New(accessToken, userID, picsurAPI, picsurURL string) *Poster {
 	return &Poster{
-		AccessToken: accessToken,
-		UserID:      userID,
-		ImgurClient: utils.New(imgurClientID),
+		AccessToken:  accessToken,
+		UserID:       userID,
+		PicsurClient: utils.New(picsurAPI, picsurURL),
 	}
 }
 
@@ -65,7 +65,7 @@ func (p *Poster) uploadImages(images []image.Image, title string) ([]string, err
 	for i, img := range images {
 		imgTitle := fmt.Sprintf("%s - Page %d", title, i+1)
 		imgDescription := fmt.Sprintf("Page %d of document: %s", i+1, title)
-		url, err := p.ImgurClient.UploadImage(img, imgTitle, imgDescription)
+		url, err := p.PicsurClient.UploadImage(img, imgTitle, imgDescription)
 		if err != nil {
 			return nil, fmt.Errorf("failed to upload image %d to Imgur: %v", i+1, err)
 		}

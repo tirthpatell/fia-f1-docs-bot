@@ -26,7 +26,7 @@ func New(cfg Config) (*Summarizer, error) {
 		return nil, fmt.Errorf("error creating Gemini client: %w", err)
 	}
 
-	model := client.GenerativeModel("gemini-exp-1121")
+	model := client.GenerativeModel("gemini-2.0-flash-lite")
 	configureModel(model)
 
 	return &Summarizer{

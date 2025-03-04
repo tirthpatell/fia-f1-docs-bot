@@ -51,7 +51,7 @@ func main() {
 	}
 	defer summarizer.Close()
 	scraper := scraper.New(cfg.FIAUrl)
-	poster := poster.New(cfg.ThreadsAccessToken, cfg.ThreadsUserID, cfg.ImgurClientID)
+	poster := poster.New(cfg.ThreadsAccessToken, cfg.ThreadsUserID, cfg.PicsurAPI, cfg.PicsurURL)
 
 	for {
 		log.Println("Checking for new documents...")
