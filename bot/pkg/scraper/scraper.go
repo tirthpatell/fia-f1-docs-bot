@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gocolly/colly/v2"
@@ -31,8 +33,9 @@ func New(baseURL string) *Scraper {
 	}
 }
 
-func (s *Scraper) FetchLatestDocument() (*Document, error) {
-	var latestDoc *Document
+// FetchLatestDocuments retrieves the specified number of most recent documents
+func (s *Scraper) FetchLatestDocuments(limit int) ([]*Document, error) {
+	var documents []*Document
 
 	s.collector.OnHTML("ul.event-wrapper", func(e *colly.HTMLElement) {
 		// Find the active (current) Grand Prix
@@ -58,10 +61,7 @@ func (s *Scraper) FetchLatestDocument() (*Document, error) {
 						Published: published,
 					}
 
-					// Update latestDoc if this document is newer
-					if latestDoc == nil || doc.Published.After(latestDoc.Published) {
-						latestDoc = doc
-					}
+					documents = append(documents, doc)
 				})
 				// Stop after processing the active Grand Prix
 				return
@@ -74,28 +74,83 @@ func (s *Scraper) FetchLatestDocument() (*Document, error) {
 		return nil, fmt.Errorf("error visiting %s: %v", s.baseURL, err)
 	}
 
-	if latestDoc == nil {
+	if len(documents) == 0 {
 		return nil, fmt.Errorf("no documents found for the current Grand Prix")
 	}
 
-	return latestDoc, nil
+	// Sort documents by publish date (most recent first)
+	// Since most recent should be first, we sort in reverse chronological order
+	sortDocumentsByDate(documents)
+
+	// Limit the number of documents if needed
+	if len(documents) > limit {
+		documents = documents[:limit]
+	}
+
+	return documents, nil
 }
 
-func (s *Scraper) DownloadDocument(doc Document) error {
+// Helper function to sort documents by date (most recent first)
+func sortDocumentsByDate(docs []*Document) {
+	// Use bubble sort for simplicity
+	n := len(docs)
+	for i := 0; i < n-1; i++ {
+		for j := 0; j < n-i-1; j++ {
+			// If the current document is older than the next one, swap them
+			if docs[j].Published.Before(docs[j+1].Published) {
+				docs[j], docs[j+1] = docs[j+1], docs[j]
+			}
+		}
+	}
+}
+
+// FetchLatestDocument returns only the most recent document
+func (s *Scraper) FetchLatestDocument() (*Document, error) {
+	docs, err := s.FetchLatestDocuments(1)
+	if err != nil {
+		return nil, err
+	}
+
+	return docs[0], nil
+}
+
+// DownloadDocument downloads a document to the specified directory and returns the file path
+func (s *Scraper) DownloadDocument(doc Document, directory string) (string, error) {
 	resp, err := http.Get(doc.URL)
 	if err != nil {
-		return fmt.Errorf("error downloading document: %v", err)
+		return "", fmt.Errorf("error downloading document: %v", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	// Create a sanitized filename from the document title
+	filename := fmt.Sprintf("%s.pdf", sanitizeFilename(doc.Title))
+	filePath := filepath.Join(directory, filename)
+
 	// Create a file to save the PDF
-	out, err := os.Create(doc.Title + ".pdf")
+	out, err := os.Create(filePath)
 	if err != nil {
-		return fmt.Errorf("error creating file: %v", err)
+		return "", fmt.Errorf("error creating file: %v", err)
 	}
 	defer out.Close()
 
 	// Write the body to file
 	_, err = io.Copy(out, resp.Body)
-	return err
+	if err != nil {
+		return "", fmt.Errorf("error writing to file: %v", err)
+	}
+
+	return filePath, nil
+}
+
+// Helper function to sanitize filenames
+func sanitizeFilename(name string) string {
+	// Simple implementation - replace problematic characters
+	for _, char := range []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|"} {
+		name = strings.ReplaceAll(name, char, "_")
+	}
+	return filepath.Clean(name)
 }

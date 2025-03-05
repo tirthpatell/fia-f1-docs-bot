@@ -20,23 +20,23 @@ const (
 
 // Poster is a struct that holds the configuration for the poster
 type Poster struct {
-	AccessToken string
-	UserID      string
-	ImgurClient *utils.Client
+	AccessToken  string
+	UserID       string
+	PicsurClient *utils.Client
 }
 
 // New creates a new Poster
-func New(accessToken, userID, imgurClientID string) *Poster {
+func New(accessToken, userID, picsurAPI, picsurURL string) *Poster {
 	return &Poster{
-		AccessToken: accessToken,
-		UserID:      userID,
-		ImgurClient: utils.New(imgurClientID),
+		AccessToken:  accessToken,
+		UserID:       userID,
+		PicsurClient: utils.New(picsurAPI, picsurURL),
 	}
 }
 
 // Post posts the images to Threads
 func (p *Poster) Post(images []image.Image, title string, publishTime time.Time, documentURL, aiSummary string) error {
-	// Upload images to Imgur
+	// Upload images to Picsur
 	imageURLs, err := p.uploadImages(images, title)
 	if err != nil {
 		return err
@@ -59,15 +59,15 @@ func (p *Poster) Post(images []image.Image, title string, publishTime time.Time,
 	return fmt.Errorf("invalid number of images: %d. Must be between 1 and 20", len(imageURLs))
 }
 
-// uploadImages uploads the given images to Imgur and returns their URLs
+// uploadImages uploads the given images to Picsur and returns their URLs
 func (p *Poster) uploadImages(images []image.Image, title string) ([]string, error) {
 	var imageURLs []string
 	for i, img := range images {
 		imgTitle := fmt.Sprintf("%s - Page %d", title, i+1)
 		imgDescription := fmt.Sprintf("Page %d of document: %s", i+1, title)
-		url, err := p.ImgurClient.UploadImage(img, imgTitle, imgDescription)
+		url, err := p.PicsurClient.UploadImage(img, imgTitle, imgDescription)
 		if err != nil {
-			return nil, fmt.Errorf("failed to upload image %d to Imgur: %v", i+1, err)
+			return nil, fmt.Errorf("failed to upload image %d to Picsur: %v", i+1, err)
 		}
 		imageURLs = append(imageURLs, url)
 	}

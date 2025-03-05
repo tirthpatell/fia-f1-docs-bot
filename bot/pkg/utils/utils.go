@@ -7,7 +7,6 @@ import (
 	"image"
 	"image/png"
 	"io"
-	"log"
 	"mime/multipart"
 	"net/http"
 	"strings"
@@ -15,25 +14,38 @@ import (
 	"github.com/gen2brain/go-fitz"
 )
 
-const imgurAPIURL = "https://api.imgur.com/3/image"
-
 type Client struct {
-	ClientID string
+	ApiKey  string
+	BaseURL string
 }
 
-type imgurResponse struct {
-	Data struct {
-		Link string `json:"link"`
+type picsurResponse struct {
+	Success    bool `json:"success"`
+	StatusCode int  `json:"statusCode"`
+	TimeMs     int  `json:"timeMs"`
+	Data       struct {
+		ID        string `json:"id"`
+		UserID    string `json:"user_id"`
+		Created   string `json:"created"`
+		FileName  string `json:"file_name"`
+		ExpiresAt any    `json:"expires_at"`
+		DeleteKey string `json:"delete_key"`
 	} `json:"data"`
-	Success bool `json:"success"`
-	Status  int  `json:"status"`
 }
 
-func New(clientID string) *Client {
-	return &Client{ClientID: clientID}
+func New(apiKey, baseURL string) *Client {
+	return &Client{
+		ApiKey:  apiKey,
+		BaseURL: baseURL,
+	}
 }
 
 func (c *Client) UploadImage(img image.Image, title, description string) (string, error) {
+	// Ensure we have a base URL
+	if c.BaseURL == "" {
+		return "", fmt.Errorf("picsur base URL not configured")
+	}
+
 	// Encode image to PNG
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
@@ -53,30 +65,18 @@ func (c *Client) UploadImage(img image.Image, title, description string) (string
 		return "", fmt.Errorf("failed to copy image data: %v", err)
 	}
 
-	// Add other fields
-	if err := writer.WriteField("type", "file"); err != nil {
-		log.Printf("Error writing field 'type': %v", err)
-	}
-
-	if err := writer.WriteField("title", title); err != nil {
-		log.Printf("Error writing field 'title': %v", err)
-	}
-
-	if err := writer.WriteField("description", description); err != nil {
-		log.Printf("Error writing field 'description': %v", err)
-	}
-
 	if err := writer.Close(); err != nil {
 		return "", fmt.Errorf("failed to close multipart writer: %v", err)
 	}
 
 	// Create request
-	req, err := http.NewRequest("POST", imgurAPIURL, body)
+	uploadURL := fmt.Sprintf("%s/api/image/upload", c.BaseURL)
+	req, err := http.NewRequest("POST", uploadURL, body)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %v", err)
 	}
 
-	req.Header.Set("Authorization", "Client-ID "+c.ClientID)
+	req.Header.Set("Authorization", "Api-Key "+c.ApiKey)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	// Send request
@@ -87,16 +87,18 @@ func (c *Client) UploadImage(img image.Image, title, description string) (string
 	defer resp.Body.Close()
 
 	// Parse response
-	var imgurResp imgurResponse
-	if err := json.NewDecoder(resp.Body).Decode(&imgurResp); err != nil {
+	var picsurResp picsurResponse
+	if err := json.NewDecoder(resp.Body).Decode(&picsurResp); err != nil {
 		return "", fmt.Errorf("failed to decode response: %v", err)
 	}
 
-	if !imgurResp.Success {
-		return "", fmt.Errorf("imgur API error: status %d", imgurResp.Status)
+	if !picsurResp.Success {
+		return "", fmt.Errorf("picsur API error: status %d", picsurResp.StatusCode)
 	}
 
-	return imgurResp.Data.Link, nil
+	// Construct the image URL from the response ID
+	imageURL := fmt.Sprintf("%s/i/%s.png", c.BaseURL, picsurResp.Data.ID)
+	return imageURL, nil
 }
 
 // Custom function to encode spaces in URL
