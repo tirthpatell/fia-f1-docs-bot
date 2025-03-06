@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -163,6 +164,12 @@ func processDocument(doc *scraper.Document, scraper *scraper.Scraper, summarizer
 
 	log.Printf("Successfully posted to Threads: %s", doc.Title)
 
+	// Add explicit cleanup after using images
+	for i := range images {
+		images[i] = nil // Help GC by explicitly nulling references
+	}
+	images = nil
+
 	// Update storage after successful posting
 	err = store.AddProcessedDocument(storage.ProcessedDocument{
 		Title:     doc.Title,
@@ -172,4 +179,7 @@ func processDocument(doc *scraper.Document, scraper *scraper.Scraper, summarizer
 	if err != nil {
 		log.Printf("Error updating storage: %v", err)
 	}
+
+	// Force garbage collection after processing large documents
+	runtime.GC()
 }
