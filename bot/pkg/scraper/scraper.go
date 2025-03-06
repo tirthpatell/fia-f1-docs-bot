@@ -19,17 +19,12 @@ type Document struct {
 }
 
 type Scraper struct {
-	baseURL   string
-	collector *colly.Collector
+	baseURL string
 }
 
 func New(baseURL string) *Scraper {
-	c := colly.NewCollector()
-	c.AllowURLRevisit = true // Allow revisiting the same URL
-
 	return &Scraper{
-		baseURL:   baseURL,
-		collector: c,
+		baseURL: baseURL,
 	}
 }
 
@@ -37,7 +32,11 @@ func New(baseURL string) *Scraper {
 func (s *Scraper) FetchLatestDocuments(limit int) ([]*Document, error) {
 	var documents []*Document
 
-	s.collector.OnHTML("ul.event-wrapper", func(e *colly.HTMLElement) {
+	// Create a fresh collector for each request
+	c := colly.NewCollector()
+	c.AllowURLRevisit = true
+
+	c.OnHTML("ul.event-wrapper", func(e *colly.HTMLElement) {
 		// Find the active (current) Grand Prix
 		e.ForEach("li", func(_ int, el *colly.HTMLElement) {
 			if el.ChildText(".event-title.active") != "" {
@@ -69,7 +68,7 @@ func (s *Scraper) FetchLatestDocuments(limit int) ([]*Document, error) {
 		})
 	})
 
-	err := s.collector.Visit(s.baseURL)
+	err := c.Visit(s.baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("error visiting %s: %v", s.baseURL, err)
 	}
