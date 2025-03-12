@@ -16,6 +16,7 @@ type Config struct {
 	GeminiAPIKey       string `mapstructure:"GEMINI_API_KEY"`
 	PicsurAPI          string `mapstructure:"PICSUR_API"`
 	PicsurURL          string `mapstructure:"PICSUR_URL"`
+	ShortenerAPIKey    string `mapstructure:"SHORTENER_API_KEY"`
 }
 
 // Load loads the configuration from environment variables and .env file.
@@ -52,6 +53,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.PicsurURL == "" {
 		return nil, fmt.Errorf("PICSUR_URL is required")
+	}
+	if cfg.ShortenerAPIKey == "" {
+		return nil, fmt.Errorf("SHORTENER_API_KEY is required")
 	}
 
 	return &cfg, nil
