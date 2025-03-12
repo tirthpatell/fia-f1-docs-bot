@@ -30,20 +30,13 @@ IMAGE_TAG="$IMAGE_NAME:$VERSION"
 # Navigate to the directory where the docker-compose.yml file is located
 cd "$SCRIPT_DIR/../docker"
 
-echo "Building Docker image with tag: $IMAGE_TAG"
+echo "Building Docker image"
 docker-compose build bot
 
 echo "Tagging the image: $IMAGE_TAG"
-# Get the image ID of the bot service
-IMAGE_ID=$(docker-compose images -q bot)
-if [ -z "$IMAGE_ID" ]; then
-  echo "Error: Could not get image ID for bot service."
-  exit 1
-fi
-
-docker tag $IMAGE_ID $IMAGE_TAG
+docker tag docker-bot:latest $IMAGE_TAG
 
 echo "Pushing the image to Docker Hub: $IMAGE_TAG"
 docker push $IMAGE_TAG
 
-echo "Docker image $IMAGE_TAG has been successfully published!"
+echo "Docker image $IMAGE_TAG has been successfully published!" 

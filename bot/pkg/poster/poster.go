@@ -20,17 +20,19 @@ const (
 
 // Poster is a struct that holds the configuration for the poster
 type Poster struct {
-	AccessToken  string
-	UserID       string
-	PicsurClient *utils.Client
+	AccessToken     string
+	UserID          string
+	PicsurClient    *utils.Client
+	ShortenerClient *utils.ShortenerClient
 }
 
 // New creates a new Poster
-func New(accessToken, userID, picsurAPI, picsurURL string) *Poster {
+func New(accessToken, userID, picsurAPI, picsurURL, shortenerAPIKey, shortenerURL string) *Poster {
 	return &Poster{
-		AccessToken:  accessToken,
-		UserID:       userID,
-		PicsurClient: utils.New(picsurAPI, picsurURL),
+		AccessToken:     accessToken,
+		UserID:          userID,
+		PicsurClient:    utils.New(picsurAPI, picsurURL),
+		ShortenerClient: utils.NewShortenerClient(shortenerAPIKey, shortenerURL),
 	}
 }
 
@@ -43,7 +45,10 @@ func (p *Poster) Post(images []image.Image, title string, publishTime time.Time,
 	}
 
 	// Format the text for the post
-	postText := formatPostText(title, publishTime, documentURL, aiSummary)
+	postText, err := p.formatPostText(title, publishTime, documentURL, aiSummary)
+	if err != nil {
+		return err
+	}
 
 	log.Printf("char count: %v", len(postText))
 
@@ -125,12 +130,27 @@ func (p *Poster) postCarousel(imageURLs []string, postText string) error {
 }
 
 // formatPostText formats the text for the post
-func formatPostText(title string, publishTime time.Time, documentURL, aiSummary string) string {
-	_ = documentURL
+func (p *Poster) formatPostText(title string, publishTime time.Time, documentURL, aiSummary string) (string, error) {
+	// Shorten the document URL if provided
+	shortenedURL := ""
+	if documentURL != "" {
+		var err error
+		shortenedURL, err = p.ShortenerClient.ShortenURL(documentURL)
+		if err != nil {
+			log.Printf("Warning: Failed to shorten URL: %v", err)
+			// Continue without the shortened URL
+		}
+	}
 
-	// Create the base text without the AI summary
-	baseText := fmt.Sprintf("New document: %s\nPublished on: %s\n\nAI Summary: ",
-		title, publishTime.Format("02-01-2006 15:04 MST"))
+	// Create the base text with or without the shortened URL
+	var baseText string
+	if shortenedURL != "" {
+		baseText = fmt.Sprintf("New document: %s\nPublished on: %s\nLink: %s\n\nAI Summary: ",
+			title, publishTime.Format("02-01-2006 15:04 MST"), shortenedURL)
+	} else {
+		baseText = fmt.Sprintf("New document: %s\nPublished on: %s\n\nAI Summary: ",
+			title, publishTime.Format("02-01-2006 15:04 MST"))
+	}
 
 	// Calculate remaining characters for the AI summary
 	suffix := "\n\n#F1Threads"
@@ -140,7 +160,7 @@ func formatPostText(title string, publishTime time.Time, documentURL, aiSummary 
 	truncatedSummary := truncateText(aiSummary, remainingChars)
 
 	// Combine all parts
-	return baseText + truncatedSummary + suffix
+	return baseText + truncatedSummary + suffix, nil
 }
 
 // truncateText truncates the text to fit within the given character limit
