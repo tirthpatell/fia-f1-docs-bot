@@ -7,19 +7,17 @@ import (
 	"net/http"
 )
 
-const (
-	shortenerBaseURL = "https://sh.threadsutil.cc"
-)
-
 // ShortenerClient is a client for the URL shortener service
 type ShortenerClient struct {
-	APIKey string
+	APIKey  string
+	BaseURL string
 }
 
 // NewShortenerClient creates a new ShortenerClient
-func NewShortenerClient(apiKey string) *ShortenerClient {
+func NewShortenerClient(apiKey, baseURL string) *ShortenerClient {
 	return &ShortenerClient{
-		APIKey: apiKey,
+		APIKey:  apiKey,
+		BaseURL: baseURL,
 	}
 }
 
@@ -48,7 +46,7 @@ func (c *ShortenerClient) ShortenURL(longURL string) (string, error) {
 	}
 
 	// Create request
-	req, err := http.NewRequest("POST", shortenerBaseURL+"/api/shorten", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", c.BaseURL+"/api/shorten", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %v", err)
 	}

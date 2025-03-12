@@ -27,12 +27,12 @@ type Poster struct {
 }
 
 // New creates a new Poster
-func New(accessToken, userID, picsurAPI, picsurURL, shortenerAPIKey string) *Poster {
+func New(accessToken, userID, picsurAPI, picsurURL, shortenerAPIKey, shortenerURL string) *Poster {
 	return &Poster{
 		AccessToken:     accessToken,
 		UserID:          userID,
 		PicsurClient:    utils.New(picsurAPI, picsurURL),
-		ShortenerClient: utils.NewShortenerClient(shortenerAPIKey),
+		ShortenerClient: utils.NewShortenerClient(shortenerAPIKey, shortenerURL),
 	}
 }
 

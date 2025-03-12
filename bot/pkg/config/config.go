@@ -17,6 +17,7 @@ type Config struct {
 	PicsurAPI          string `mapstructure:"PICSUR_API"`
 	PicsurURL          string `mapstructure:"PICSUR_URL"`
 	ShortenerAPIKey    string `mapstructure:"SHORTENER_API_KEY"`
+	ShortenerURL       string `mapstructure:"SHORTENER_URL"`
 }
 
 // Load loads the configuration from environment variables and .env file.
@@ -56,6 +57,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.ShortenerAPIKey == "" {
 		return nil, fmt.Errorf("SHORTENER_API_KEY is required")
+	}
+	if cfg.ShortenerURL == "" {
+		return nil, fmt.Errorf("SHORTENER_URL is required")
 	}
 
 	return &cfg, nil
