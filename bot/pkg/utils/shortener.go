@@ -65,8 +65,8 @@ func (c *ShortenerClient) ShortenURL(longURL string) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	// Check response status
-	if resp.StatusCode != http.StatusOK {
+	// Check response status - accept both 200 OK and 201 Created as success
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return "", fmt.Errorf("shortener service returned status code %d", resp.StatusCode)
 	}
 
