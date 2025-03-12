@@ -17,6 +17,7 @@ This bot aims to make FIA F1 decision documents more accessible by automatically
 - **Automated Scraping**: Periodically scrapes the FIA website for the latest decision documents.
 - **Automated Posting**: Posts the fetched documents to a specified Threads account.
 - **AI Summarization**: Uses Google Gemini to generate concise summaries of each document.
+- **URL Shortening**: Shortens document URLs to include them in posts without exceeding character limits.
 - **Docker Support**: Easily deployable using Docker for consistent environments.
 
 ## How It Works
@@ -24,7 +25,8 @@ This bot aims to make FIA F1 decision documents more accessible by automatically
 1. **Scraping**: The bot scrapes the FIA website at a user-defined interval to check for new decision documents.
 2. **Processing**: New documents are converted to images and summarized using Google Gemini API.
 3. **Image Hosting**: Images are uploaded to a Picsur instance to get public URLs.
-4. **Posting**: The bot automatically posts the images with AI summaries to the configured Threads account.
+4. **URL Shortening**: Document URLs are shortened to fit within Threads character limits.
+5. **Posting**: The bot automatically posts the images with AI summaries and shortened URLs to the configured Threads account.
 
 ## Requirements
 
@@ -33,6 +35,7 @@ This bot aims to make FIA F1 decision documents more accessible by automatically
 - Threads API access (see Limitations section)
 - Google Gemini API for AI summarization (Can be skipped if not needed)
 - Picsur instance for image hosting (self-hosted or third-party)
+- URL shortener service for document links
 
 ## Quick Start with Docker
 
@@ -51,6 +54,8 @@ This bot aims to make FIA F1 decision documents more accessible by automatically
    GEMINI_API_KEY=your_google_gemini_api_key_here
    PICSUR_API=your_picsur_api_key_here
    PICSUR_URL=https://picsur.example.com
+   SHORTENER_API_KEY=your_shortener_api_key_here
+   SHORTENER_URL=https://shortener.example.com
    ```
 
 3. Create a `docker-compose.yml` file:
@@ -98,6 +103,16 @@ This bot aims to make FIA F1 decision documents more accessible by automatically
 ## Configuration
 
 The bot is configured using environment variables. See the Quick Start section for the required variables.
+
+### URL Shortener Configuration
+
+The bot uses a URL shortener service to create shortened links to the original FIA documents. This allows the bot to include direct links in posts without exceeding Threads' character limits.
+
+Required environment variables for the URL shortener:
+- `SHORTENER_API_KEY`: API key for authentication with the shortener service
+- `SHORTENER_URL`: Base URL of the shortener service (e.g., https://shortener.example.com)
+
+The shortened URLs will be included in the post text, allowing users to easily access the original documents.
 
 ## Contributing
 
