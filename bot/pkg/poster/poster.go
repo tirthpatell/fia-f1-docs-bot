@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -68,6 +69,51 @@ func (p *Poster) Post(images []image.Image, title string, publishTime time.Time,
 	}
 
 	return fmt.Errorf("invalid number of images: %d. Must be between 1 and 20", len(imageURLs))
+}
+
+// PostTextOnly posts a text-only message to Threads without any media
+func (p *Poster) PostTextOnly(text string) error {
+	// Truncate text if it exceeds the character limit
+	if len(text) > maxCharacterLimit {
+		text = truncateText(text, maxCharacterLimit)
+	}
+
+	// Use the threads endpoint with text-only payload
+	threadsURL := fmt.Sprintf("https://graph.threads.net/v1.0/%s/threads", p.UserID)
+
+	// URL encode the text for the payload
+	encodedText := strings.ReplaceAll(url.QueryEscape(text), "+", "%20")
+
+	// Create the payload for a text-only post
+	payload := fmt.Sprintf("text=%s&access_token=%s", encodedText, p.AccessToken)
+
+	// Make the API request to create the text-only post
+	mediaID, err := p.makePostRequest(threadsURL, payload)
+	if err != nil {
+		return fmt.Errorf("failed to create text-only post: %v", err)
+	}
+
+	log.Printf("Created text-only post with ID: %s", mediaID)
+
+	// Publish the post
+	if err := p.publishMedia(mediaID); err != nil {
+		return fmt.Errorf("failed to publish text-only post: %v", err)
+	}
+
+	log.Printf("Successfully posted text-only message")
+	return nil
+}
+
+// formatJSONString properly escapes a string for JSON
+func formatJSONString(s string) string {
+	bytes, err := json.Marshal(s)
+	if err != nil {
+		// If marshaling fails, do a basic escaping
+		s = strings.ReplaceAll(s, "\"", "\\\"")
+		s = strings.ReplaceAll(s, "\n", "\\n")
+		return fmt.Sprintf("\"%s\"", s)
+	}
+	return string(bytes)
 }
 
 // uploadImages uploads the given images to Picsur and returns their URLs
