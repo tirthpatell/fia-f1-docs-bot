@@ -85,7 +85,7 @@ func (p *Poster) PostTextOnly(text string) error {
 	encodedText := strings.ReplaceAll(url.QueryEscape(text), "+", "%20")
 
 	// Create the payload for a text-only post
-	payload := fmt.Sprintf("text=%s&access_token=%s", encodedText, p.AccessToken)
+	payload := fmt.Sprintf("media_type=TEXT&text=%s&access_token=%s", encodedText, p.AccessToken)
 
 	// Make the API request to create the text-only post
 	mediaID, err := p.makePostRequest(threadsURL, payload)
@@ -102,18 +102,6 @@ func (p *Poster) PostTextOnly(text string) error {
 
 	log.Printf("Successfully posted text-only message")
 	return nil
-}
-
-// formatJSONString properly escapes a string for JSON
-func formatJSONString(s string) string {
-	bytes, err := json.Marshal(s)
-	if err != nil {
-		// If marshaling fails, do a basic escaping
-		s = strings.ReplaceAll(s, "\"", "\\\"")
-		s = strings.ReplaceAll(s, "\n", "\\n")
-		return fmt.Sprintf("\"%s\"", s)
-	}
-	return string(bytes)
 }
 
 // uploadImages uploads the given images to Picsur and returns their URLs
