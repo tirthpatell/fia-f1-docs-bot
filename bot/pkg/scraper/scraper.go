@@ -115,6 +115,11 @@ func (s *Scraper) FetchLatestDocument() (*Document, error) {
 
 // DownloadDocument downloads a document to the specified directory and returns the file path
 func (s *Scraper) DownloadDocument(doc Document, directory string) (string, error) {
+	// Check if the document is recalled based on its title
+	if s.IsRecalledDocument(doc) {
+		return "", fmt.Errorf("document has been recalled: %s", doc.Title)
+	}
+
 	resp, err := http.Get(doc.URL)
 	if err != nil {
 		return "", fmt.Errorf("error downloading document: %v", err)
@@ -142,7 +147,55 @@ func (s *Scraper) DownloadDocument(doc Document, directory string) (string, erro
 		return "", fmt.Errorf("error writing to file: %v", err)
 	}
 
+	// Verify the downloaded file is a valid PDF
+	if err := s.verifyPDF(filePath); err != nil {
+		// If verification fails, it might be a recalled document that wasn't properly marked
+		os.Remove(filePath) // Clean up the invalid file
+		return "", fmt.Errorf("invalid PDF file (possibly recalled): %v", err)
+	}
+
 	return filePath, nil
+}
+
+// IsRecalledDocument checks if a document has been recalled based on its title
+func (s *Scraper) IsRecalledDocument(doc Document) bool {
+	// Check if the title contains "Recalled" or similar indicators
+	return strings.HasPrefix(strings.ToLower(doc.Title), "recalled") ||
+		strings.Contains(strings.ToLower(doc.Title), "recalled -")
+}
+
+// verifyPDF checks if a file is a valid PDF
+func (s *Scraper) verifyPDF(filePath string) error {
+	// Open the file
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// Read the first few bytes to check for PDF signature
+	header := make([]byte, 5)
+	_, err = file.Read(header)
+	if err != nil {
+		return err
+	}
+
+	// Check if the file starts with the PDF signature (%PDF-)
+	if string(header) != "%PDF-" {
+		return fmt.Errorf("file does not have a valid PDF signature")
+	}
+
+	// Check file size - extremely small PDFs are suspicious
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return err
+	}
+
+	if fileInfo.Size() < 1000 { // Less than 1KB is suspicious for a F1 document
+		return fmt.Errorf("file is too small to be a valid F1 document PDF")
+	}
+
+	return nil
 }
 
 // Helper function to sanitize filenames

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -38,6 +39,12 @@ func New(accessToken, userID, picsurAPI, picsurURL, shortenerAPIKey, shortenerUR
 
 // Post posts the images to Threads
 func (p *Poster) Post(images []image.Image, title string, publishTime time.Time, documentURL, aiSummary string) error {
+	// Limit to 20 images if there are more
+	if len(images) > 20 {
+		log.Printf("Limiting from %d to 20 images as per Threads API limitations", len(images))
+		images = images[:20]
+	}
+
 	// Upload images to Picsur
 	imageURLs, err := p.uploadImages(images, title)
 	if err != nil {
@@ -64,18 +71,62 @@ func (p *Poster) Post(images []image.Image, title string, publishTime time.Time,
 	return fmt.Errorf("invalid number of images: %d. Must be between 1 and 20", len(imageURLs))
 }
 
+// PostTextOnly posts a text-only message to Threads without any media
+func (p *Poster) PostTextOnly(text string) error {
+	// Truncate text if it exceeds the character limit
+	if len(text) > maxCharacterLimit {
+		text = truncateText(text, maxCharacterLimit)
+	}
+
+	// Use the threads endpoint with text-only payload
+	threadsURL := fmt.Sprintf("https://graph.threads.net/v1.0/%s/threads", p.UserID)
+
+	// URL encode the text for the payload
+	encodedText := strings.ReplaceAll(url.QueryEscape(text), "+", "%20")
+
+	// Create the payload for a text-only post
+	payload := fmt.Sprintf("media_type=TEXT&text=%s&access_token=%s", encodedText, p.AccessToken)
+
+	// Make the API request to create the text-only post
+	mediaID, err := p.makePostRequest(threadsURL, payload)
+	if err != nil {
+		return fmt.Errorf("failed to create text-only post: %v", err)
+	}
+
+	log.Printf("Created text-only post with ID: %s", mediaID)
+
+	// Publish the post
+	if err := p.publishMedia(mediaID); err != nil {
+		return fmt.Errorf("failed to publish text-only post: %v", err)
+	}
+
+	log.Printf("Successfully posted text-only message")
+	return nil
+}
+
 // uploadImages uploads the given images to Picsur and returns their URLs
 func (p *Poster) uploadImages(images []image.Image, title string) ([]string, error) {
 	var imageURLs []string
 	for i, img := range images {
 		imgTitle := fmt.Sprintf("%s - Page %d", title, i+1)
 		imgDescription := fmt.Sprintf("Page %d of document: %s", i+1, title)
+
+		// Add a small delay between uploads to prevent overwhelming the service
+		if i > 0 {
+			time.Sleep(500 * time.Millisecond)
+		}
+
 		url, err := p.PicsurClient.UploadImage(img, imgTitle, imgDescription)
 		if err != nil {
 			return nil, fmt.Errorf("failed to upload image %d to Picsur: %v", i+1, err)
 		}
 		imageURLs = append(imageURLs, url)
+		log.Printf("Uploaded image %d/%d", i+1, len(images))
 	}
+
+	// Small delay after all uploads to ensure they're processed
+	time.Sleep(2 * time.Second)
+
 	return imageURLs, nil
 }
 
@@ -88,6 +139,9 @@ func (p *Poster) postSingleImage(imageURL, postText string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create item container: %v", err)
 	}
+
+	// Small delay before creating media container
+	time.Sleep(1 * time.Second)
 
 	// Create media container with the image and text
 	mediaID, err := p.createMediaContainer(itemID, postText, "IMAGE", imageURL)
@@ -108,7 +162,12 @@ func (p *Poster) postCarousel(imageURLs []string, postText string) error {
 
 	// Create item containers for each image
 	var itemIDs []string
-	for _, url := range imageURLs {
+	for i, url := range imageURLs {
+		// Add a small delay between container creations
+		if i > 0 {
+			time.Sleep(500 * time.Millisecond)
+		}
+
 		itemID, err := p.createItemContainer(url, true)
 		if err != nil {
 			return fmt.Errorf("failed to create item container: %v", err)
@@ -234,13 +293,13 @@ func (p *Poster) publishCarousel(carouselID string) error {
 func (p *Poster) makePostRequest(url, payload string) (string, error) {
 	resp, err := http.Post(url, "application/x-www-form-urlencoded", strings.NewReader(payload))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("HTTP request failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to read response body: %v", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -251,7 +310,11 @@ func (p *Poster) makePostRequest(url, payload string) (string, error) {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to parse response JSON: %v - Body: %s", err, string(body))
+	}
+
+	if result.ID == "" {
+		return "", fmt.Errorf("received empty ID in response: %s", string(body))
 	}
 
 	return result.ID, nil

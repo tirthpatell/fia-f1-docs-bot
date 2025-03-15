@@ -1,7 +1,8 @@
 module bot
 
-go 1.23
-toolchain go1.23.1
+go 1.23.0
+
+toolchain go1.24.1
 
 require (
 	github.com/spf13/viper v1.19.0

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -131,6 +132,31 @@ func processDocument(doc *scraper.Document, scraper *scraper.Scraper, summarizer
 	// Download the document
 	pdfPath, err := scraper.DownloadDocument(*doc, docDir)
 	if err != nil {
+		// Check if this is a recalled document
+		if strings.Contains(err.Error(), "document has been recalled") ||
+			strings.Contains(err.Error(), "invalid PDF file (possibly recalled)") {
+			log.Printf("Detected recalled document: %s", doc.Title)
+
+			// Post a text-only message about the recalled document
+			err = postRecalledDocumentNotice(poster, doc)
+			if err != nil {
+				log.Printf("Error posting recalled document notice: %v", err)
+				return
+			}
+
+			// Mark as processed to avoid repeated attempts
+			err = store.AddProcessedDocument(storage.ProcessedDocument{
+				Title:     doc.Title,
+				URL:       doc.URL,
+				Timestamp: doc.Published,
+			})
+			if err != nil {
+				log.Printf("Error updating storage: %v", err)
+			}
+
+			return
+		}
+
 		log.Printf("Error downloading document: %v", err)
 		return
 	}
@@ -182,4 +208,15 @@ func processDocument(doc *scraper.Document, scraper *scraper.Scraper, summarizer
 
 	// Force garbage collection after processing large documents
 	runtime.GC()
+}
+
+// postRecalledDocumentNotice posts a text-only message about a recalled document
+func postRecalledDocumentNotice(poster *poster.Poster, doc *scraper.Document) error {
+	// Create a message about the recalled document
+	message := fmt.Sprintf("🚫 DOCUMENT RECALLED 🚫\n\nThe FIA has recalled the following document:\n\n%s\n\nPublished: %s\n\nThis document is no longer available.\n\n#F1Threads",
+		doc.Title,
+		doc.Published.Format("January 2, 2006 at 15:04 MST"))
+
+	// Post a text-only message
+	return poster.PostTextOnly(message)
 }
