@@ -46,7 +46,6 @@ This bot aims to make FIA F1 decision documents more accessible by automatically
 
 2. Create a `.env` file with the following variables:
    ```
-   DOCUMENT=file.json
    FIA_URL=https://www.fia.com/documents/championships/fia-formula-one-world-championship-14/season/season-2025-2071
    SCRAPE_INTERVAL=300
    THREADS_USER_ID=your_threads_user_id_here
@@ -56,23 +55,45 @@ This bot aims to make FIA F1 decision documents more accessible by automatically
    PICSUR_URL=https://picsur.example.com
    SHORTENER_API_KEY=your_shortener_api_key_here
    SHORTENER_URL=https://shortener.example.com
+   
+   # PostgreSQL Configuration
+   DB_HOST=localhost
+   DB_PORT=5432
+   DB_USER=postgres
+   DB_PASSWORD=your_secure_password
+   DB_NAME=fiadocs
+   DB_SSL_MODE=disable
    ```
 
-3. Create a `docker-compose.yml` file:
+3. Run the container:
+   ```sh
+   docker run -d \
+     --name fia-f1-docs-bot \
+     --env-file .env \
+     ptirth/fia-f1-docs-bot:latest
+   ```
+
+   Or using Docker Compose:
    ```yaml
    services:
      bot:
        image: ptirth/fia-f1-docs-bot:latest
-       env_file: .env
-       volumes:
-         - ./data:/app/data
+       env_file:
+         - .env
        restart: unless-stopped
    ```
 
-4. Run the bot:
-   ```sh
-   docker-compose up -d
-   ```
+### Persistent Storage
+
+The bot uses PostgreSQL to store information about processed documents, ensuring persistence across container restarts and deployments.
+
+### PostgreSQL Configuration
+
+To configure PostgreSQL:
+
+1. Set up a PostgreSQL database
+2. Configure the environment variables as shown in the Quick Start section
+3. The bot will automatically create the necessary tables in the database
 
 ## Local Development Setup
 

@@ -8,7 +8,15 @@ import (
 
 // Config represents the configuration of the bot.
 type Config struct {
-	Document           string `mapstructure:"DOCUMENT"`
+	// Storage configuration
+	DBHost     string `mapstructure:"DB_HOST"`
+	DBPort     string `mapstructure:"DB_PORT"`
+	DBUser     string `mapstructure:"DB_USER"`
+	DBPassword string `mapstructure:"DB_PASSWORD"`
+	DBName     string `mapstructure:"DB_NAME"`
+	DBSSLMode  string `mapstructure:"DB_SSL_MODE"`
+
+	// Other configuration
 	FIAUrl             string `mapstructure:"FIA_URL"`
 	ThreadsAccessToken string `mapstructure:"THREADS_ACCESS_TOKEN"`
 	ThreadsUserID      string `mapstructure:"THREADS_USER_ID"`
@@ -36,8 +44,9 @@ func Load() (*Config, error) {
 	}
 
 	// Set default values
-	viper.SetDefault("DOCUMENT", "file.json")
 	viper.SetDefault("SCRAPE_INTERVAL", 30)
+	viper.SetDefault("DB_PORT", "5432")
+	viper.SetDefault("DB_SSL_MODE", "disable")
 
 	// Validate required fields
 	if cfg.ThreadsAccessToken == "" {
@@ -60,6 +69,20 @@ func Load() (*Config, error) {
 	}
 	if cfg.ShortenerURL == "" {
 		return nil, fmt.Errorf("SHORTENER_URL is required")
+	}
+
+	// Validate PostgreSQL configuration
+	if cfg.DBHost == "" {
+		return nil, fmt.Errorf("DB_HOST is required")
+	}
+	if cfg.DBUser == "" {
+		return nil, fmt.Errorf("DB_USER is required")
+	}
+	if cfg.DBPassword == "" {
+		return nil, fmt.Errorf("DB_PASSWORD is required")
+	}
+	if cfg.DBName == "" {
+		return nil, fmt.Errorf("DB_NAME is required")
 	}
 
 	return &cfg, nil
