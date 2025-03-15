@@ -5,6 +5,7 @@ go 1.23.0
 toolchain go1.24.1
 
 require (
+	github.com/lib/pq v1.10.9
 	github.com/spf13/viper v1.19.0
 	google.golang.org/api v0.186.0
 )

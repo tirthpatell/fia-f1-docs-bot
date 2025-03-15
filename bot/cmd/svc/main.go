@@ -53,10 +53,26 @@ func main() {
 		}
 	}()
 
-	store, err := storage.New(cfg.Document)
+	// Initialize storage based on configuration
+	log.Println("Initializing PostgreSQL storage...")
+	store, err := storage.NewPostgres(
+		cfg.DBHost,
+		cfg.DBPort,
+		cfg.DBUser,
+		cfg.DBPassword,
+		cfg.DBName,
+		cfg.DBSSLMode,
+	)
 	if err != nil {
-		log.Fatalf("Failed to initialize storage: %v", err)
+		log.Fatalf("Failed to initialize PostgreSQL storage: %v", err)
 	}
+
+	// Close storage when done
+	defer func() {
+		if err := store.Close(); err != nil {
+			log.Printf("Error closing storage: %v", err)
+		}
+	}()
 
 	// Initialize the packages
 	summarizer, err := summary.New(summary.Config{
@@ -120,7 +136,7 @@ func main() {
 }
 
 // processDocument handles all steps for a single document
-func processDocument(doc *scraper.Document, scraper *scraper.Scraper, summarizer *summary.Summarizer, poster *poster.Poster, store *storage.Storage, cfg *config.Config) {
+func processDocument(doc *scraper.Document, scraper *scraper.Scraper, summarizer *summary.Summarizer, poster *poster.Poster, store storage.StorageInterface, cfg *config.Config) {
 	// Create a unique directory for this document
 	docDir := filepath.Join(tempDir, fmt.Sprintf("%d", time.Now().UnixNano()))
 	if err := os.MkdirAll(docDir, 0755); err != nil {
