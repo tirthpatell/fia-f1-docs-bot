@@ -1,0 +1,28 @@
+# Ignore environment files
+.env
+.env.*
+**/.env
+**/.env.*
+
+# Ignore git and version control
+.git
+.gitignore
+.github
+
+# Ignore development files
+node_modules
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+
+# Ignore logs
+*.log
+
+# Ignore Docker files
+Dockerfile
+docker-compose.yml 

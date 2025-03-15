@@ -4,7 +4,7 @@ services:
       context: ../bot
       dockerfile: ../docker/DOCKERFILE
     env_file:
-      - ../bot/.env
+      - ../bot/.env.example
     volumes:
       - ../bot:/app
     networks:
