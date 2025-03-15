@@ -30,6 +30,17 @@ IMAGE_TAG="$IMAGE_NAME:$VERSION"
 # Navigate to the directory where the docker-compose.yml file is located
 cd "$SCRIPT_DIR/../docker"
 
+# Security warning
+echo "⚠️ SECURITY WARNING ⚠️"
+echo "Ensure that no sensitive environment variables are included in the Docker image."
+echo "Check that .dockerignore is properly configured to exclude .env files."
+echo "Continue with build? (y/n)"
+read -r response
+if [[ "$response" != "y" ]]; then
+  echo "Build cancelled."
+  exit 0
+fi
+
 echo "Building Docker image"
 docker-compose build bot
 
@@ -39,4 +50,5 @@ docker tag docker-bot:latest $IMAGE_TAG
 echo "Pushing the image to Docker Hub: $IMAGE_TAG"
 docker push $IMAGE_TAG
 
-echo "Docker image $IMAGE_TAG has been successfully published!" 
+echo "Docker image $IMAGE_TAG has been successfully published!"
+echo "Remember: When running this container, pass environment variables securely using --env-file" 
