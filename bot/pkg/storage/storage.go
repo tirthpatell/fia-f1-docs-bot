@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"bot/pkg/scraper"
+	"context"
 	"time"
 )
 
@@ -14,10 +16,16 @@ type ProcessedDocument struct {
 // StorageInterface defines the interface for storage implementations
 type StorageInterface interface {
 	// AddProcessedDocument adds a document to the processed documents list
-	AddProcessedDocument(doc ProcessedDocument) error
+	AddProcessedDocument(ctx context.Context, doc ProcessedDocument) error
 
 	// IsDocumentProcessed checks if a document has been processed
-	IsDocumentProcessed(url string) bool
+	IsDocumentProcessed(ctx context.Context, doc *scraper.Document) bool
+
+	// CheckConnection checks if the database connection is still active
+	CheckConnection() error
+
+	// Reconnect attempts to reconnect to the database if the connection is lost
+	Reconnect() error
 
 	// Close closes the storage (if needed)
 	Close() error
