@@ -20,7 +20,7 @@ const (
 	LevelError Level = "error"
 
 	// Context key for request ID
-	ctxKeyRequestID = "request_id"
+	ctxKeyRequestID = "requestID"
 )
 
 // Logger wraps slog.Logger for structured logging
@@ -201,7 +201,7 @@ func (l *Logger) WithRequestContext(ctx context.Context) *Logger {
 		reqID = "unknown"
 	}
 
-	logger := l.Logger.With("request_id", reqID)
+	logger := l.Logger.With("requestID", reqID)
 	return &Logger{
 		Logger:      logger,
 		serviceName: l.serviceName,
