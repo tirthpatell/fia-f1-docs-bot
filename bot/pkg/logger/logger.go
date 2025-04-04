@@ -2,7 +2,6 @@ package logger
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -21,7 +20,7 @@ const (
 	LevelError Level = "error"
 
 	// Context key for request ID
-	ctxKeyRequestID = "request_id"
+	ctxKeyRequestID = "requestID"
 )
 
 // Logger wraps slog.Logger for structured logging
@@ -202,7 +201,7 @@ func (l *Logger) WithRequestContext(ctx context.Context) *Logger {
 		reqID = "unknown"
 	}
 
-	logger := l.Logger.With("request_id", reqID)
+	logger := l.Logger.With("requestID", reqID)
 	return &Logger{
 		Logger:      logger,
 		serviceName: l.serviceName,
@@ -228,11 +227,6 @@ func NewRequestContext() (context.Context, string) {
 
 // Helper to generate a unique request ID
 func generateRequestID() string {
-	hostname := os.Getenv("HOSTNAME")
-	if hostname == "" {
-		hostname = "local"
-	}
-
 	id := uuid.New()
-	return fmt.Sprintf("%s-%s", hostname, id.String())
+	return id.String()
 }
