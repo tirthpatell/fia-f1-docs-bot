@@ -2,7 +2,6 @@ package logger
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -228,11 +227,6 @@ func NewRequestContext() (context.Context, string) {
 
 // Helper to generate a unique request ID
 func generateRequestID() string {
-	hostname := os.Getenv("HOSTNAME")
-	if hostname == "" {
-		hostname = "local"
-	}
-
 	id := uuid.New()
-	return fmt.Sprintf("%s-%s", hostname, id.String())
+	return id.String()
 }
