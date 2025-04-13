@@ -124,6 +124,9 @@ func (p *Poster) PostTextOnly(ctx context.Context, text string) error {
 
 	ctxLog.Debug("Created text-only post", "mediaID", mediaID)
 
+	ctxLog.Info("Waiting before publishing text-only post...")
+	time.Sleep(2 * time.Second)
+
 	// Publish the post
 	if err := p.publishMedia(ctx, mediaID); err != nil {
 		ctxLog.Error("Failed to publish text-only post", "error", err)
