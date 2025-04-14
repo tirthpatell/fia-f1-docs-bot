@@ -207,9 +207,11 @@ func main() {
 				err := postRecalledDocumentNotice(cycleCtx, poster, doc)
 				if err != nil {
 					cycleLog.Error("Error posting recalled document notice", "error", err)
+					// Skip marking as processed if posting the notice failed, allow retry next cycle
+					continue
 				}
 
-				// Mark as processed to avoid repeated attempts
+				// Mark as processed only if the notice was successfully posted
 				cycleLog.Info("Marking recalled document as processed")
 				err = store.AddProcessedDocument(cycleCtx, storage.ProcessedDocument{
 					Title:     doc.Title,
