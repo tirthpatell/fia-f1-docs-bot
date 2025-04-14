@@ -373,7 +373,7 @@ func postRecalledDocumentNotice(ctx context.Context, poster *poster.Poster, doc 
 	// Create a message about the recalled document
 	message := fmt.Sprintf("🚫 DOCUMENT RECALLED 🚫\n\nThe FIA has recalled the following document:\n\n%s\n\nPublished: %s\n\nThis document is no longer available.\n\n#F1Threads",
 		doc.Title,
-		doc.Published.Format("January 2, 2006 at 15:04 MST"))
+		doc.Published.Format("02-01-2006 15:04 MST"))
 
 	// Post a text-only message
 	return poster.PostTextOnly(ctx, message)
