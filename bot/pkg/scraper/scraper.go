@@ -96,20 +96,31 @@ func (s *Scraper) FetchLatestDocuments(ctx context.Context, limit int) ([]*Docum
 
 					fullURL := "https://www.fia.com" + relativeURL
 
-					published, err := time.Parse("02.01.06 15:04", publishedStr)
+					// Load the Europe/Paris timezone
+					parisTZ, err := time.LoadLocation("Europe/Paris")
+					if err != nil {
+						ctxLog.Error("Failed to load Europe/Paris timezone", "error", err)
+						parisTZ = time.UTC // Fallback to UTC if loading fails
+					}
+
+					// Parse the time assuming it's in the Paris timezone
+					published, err := time.ParseInLocation("02.01.06 15:04", publishedStr, parisTZ)
 					if err != nil {
 						ctxLog.Error("Error parsing date", "date", publishedStr, "error", err)
-						return
+						published, _ = time.Parse("02.01.06 15:04", publishedStr) // Fallback to UTC if parsing fails
 					}
+
+					// Convert to UTC for consistency
+					publishedUTC := published.UTC()
 
 					doc := &Document{
 						Title:     title,
 						URL:       fullURL,
-						Published: published,
+						Published: publishedUTC, // Store as UTC
 					}
 
 					documents = append(documents, doc)
-					ctxLog.Debug("Found document", "title", title, "published", published)
+					ctxLog.Debug("Found document", "title", title, "publishedUTC", publishedUTC)
 				})
 				// Stop after processing the active Grand Prix
 				return
