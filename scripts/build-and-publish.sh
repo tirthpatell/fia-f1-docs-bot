@@ -30,18 +30,18 @@ IMAGE_TAG="$IMAGE_NAME:$VERSION"
 # Navigate to the directory where the docker-compose.yml file is located
 cd "$SCRIPT_DIR/../docker"
 
-echo "Building Docker image with tag: $IMAGE_TAG"
-docker-compose build bot
+echo "Setting up Docker Buildx for multi-platform builds..."
+# Create and use a new buildx builder if it doesn't exist
+docker buildx create --name multiplatform --use 2>/dev/null || docker buildx use multiplatform
 
-echo "Tagging the image: $IMAGE_TAG"
-# Get the image ID of the bot service
-IMAGE_ID=$(docker-compose images -q bot)
-if [ -z "$IMAGE_ID" ]; then
-  echo "Error: Could not get image ID for bot service."
-  exit 1
-fi
-
-docker tag $IMAGE_ID $IMAGE_TAG
+echo "Building Docker image with tag: $IMAGE_TAG for linux/amd64 platform"
+# Build the image locally first
+docker buildx build \
+  --platform linux/amd64 \
+  --file ../docker/DOCKERFILE \
+  --tag $IMAGE_TAG \
+  --load \
+  ../bot
 
 echo "Pushing the image to Docker Hub: $IMAGE_TAG"
 docker push $IMAGE_TAG

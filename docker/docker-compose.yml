@@ -3,6 +3,7 @@ services:
     build:
       context: ../bot
       dockerfile: ../docker/DOCKERFILE
+    platform: linux/amd64
     env_file:
       - ../bot/.env.example
     volumes:
