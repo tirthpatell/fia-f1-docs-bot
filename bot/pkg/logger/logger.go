@@ -5,7 +5,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"runtime"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -175,22 +177,51 @@ func Package(pkg string) *Logger {
 
 // Debug logs at debug level
 func (l *Logger) Debug(msg string, args ...interface{}) {
-	l.Logger.Debug(msg, args...)
+	l.logWithCaller(slog.LevelDebug, msg, args...)
 }
 
 // Info logs at info level
 func (l *Logger) Info(msg string, args ...interface{}) {
-	l.Logger.Info(msg, args...)
+	l.logWithCaller(slog.LevelInfo, msg, args...)
 }
 
 // Warn logs at warn level
 func (l *Logger) Warn(msg string, args ...interface{}) {
-	l.Logger.Warn(msg, args...)
+	l.logWithCaller(slog.LevelWarn, msg, args...)
 }
 
 // Error logs at error level
 func (l *Logger) Error(msg string, args ...interface{}) {
-	l.Logger.Error(msg, args...)
+	l.logWithCaller(slog.LevelError, msg, args...)
+}
+
+// logWithCaller logs with proper caller information, skipping the wrapper frame
+func (l *Logger) logWithCaller(level slog.Level, msg string, args ...interface{}) {
+	ctx := context.Background()
+	if !l.Logger.Enabled(ctx, level) {
+		return
+	}
+
+	var pcs [1]uintptr
+	runtime.Callers(3, pcs[:]) // skip [Callers, logWithCaller, Info/Debug/etc]
+	r := slog.NewRecord(time.Now(), level, msg, pcs[0])
+
+	// Convert args to slog.Attr
+	if len(args) > 0 {
+		attrs := make([]slog.Attr, 0, len(args)/2)
+		for i := 0; i < len(args); i += 2 {
+			if i+1 < len(args) {
+				key := args[i]
+				value := args[i+1]
+				if keyStr, ok := key.(string); ok {
+					attrs = append(attrs, slog.Any(keyStr, value))
+				}
+			}
+		}
+		r.AddAttrs(attrs...)
+	}
+
+	_ = l.Logger.Handler().Handle(ctx, r)
 }
 
 // WithRequestContext creates a logger with request context information
