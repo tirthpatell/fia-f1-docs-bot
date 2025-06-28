@@ -41,7 +41,7 @@ type picsurResponse struct {
 
 func New(apiKey, baseURL string) *Client {
 	ctxLog := log.WithContext("method", "New")
-	ctxLog.Debug("Creating new Picsur client", "baseURL", baseURL)
+	ctxLog.Info("Creating new Picsur client", "baseURL", baseURL)
 
 	return &Client{
 		ApiKey:  apiKey,
