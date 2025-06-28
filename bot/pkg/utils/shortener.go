@@ -17,7 +17,7 @@ type ShortenerClient struct {
 // NewShortenerClient creates a new ShortenerClient
 func NewShortenerClient(apiKey, baseURL string) *ShortenerClient {
 	ctxLog := log.WithContext("method", "NewShortenerClient")
-	ctxLog.Debug("Creating new URL shortener client", "baseURL", baseURL)
+	ctxLog.Info("Creating new URL shortener client", "baseURL", baseURL)
 
 	return &ShortenerClient{
 		APIKey:  apiKey,
