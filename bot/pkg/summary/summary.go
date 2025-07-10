@@ -144,7 +144,12 @@ func (s *Summarizer) uploadFile(ctx context.Context, path, mimeType string) (str
 		ctxLog.Error("Error opening file", "error", err)
 		return "", fmt.Errorf("error opening file: %w", err)
 	}
-	defer file.Close()
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+			ctxLog.Error("Error closing file", "error", err)
+		}
+	}(file)
 
 	options := genai.UploadFileOptions{
 		DisplayName: path,

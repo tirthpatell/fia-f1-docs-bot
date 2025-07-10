@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 )
 
@@ -76,7 +77,12 @@ func (c *ShortenerClient) ShortenURL(ctx context.Context, longURL string) (strin
 		ctxLog.Error("Failed to send request", "error", err)
 		return "", fmt.Errorf("failed to send request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			ctxLog.Error("Failed to close response body", "error", err)
+		}
+	}(resp.Body)
 
 	// Check response status - accept both 200 OK and 201 Created as success
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {

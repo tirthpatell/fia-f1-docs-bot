@@ -49,7 +49,7 @@ func New(apiKey, baseURL string) *Client {
 	}
 }
 
-func (c *Client) UploadImage(ctx context.Context, img image.Image, title, description string) (string, error) {
+func (c *Client) UploadImage(ctx context.Context, img image.Image) (string, error) {
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "UploadImage")
 
@@ -107,7 +107,12 @@ func (c *Client) UploadImage(ctx context.Context, img image.Image, title, descri
 		ctxLog.Error("Failed to send request", "error", err)
 		return "", fmt.Errorf("failed to send request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			ctxLog.Error("Failed to close response body", "error", err)
+		}
+	}(resp.Body)
 
 	// Parse response
 	var picsurResp picsurResponse
@@ -127,12 +132,12 @@ func (c *Client) UploadImage(ctx context.Context, img image.Image, title, descri
 	return imageURL, nil
 }
 
-// Custom function to encode spaces in URL
+// EncodeURL encodes spaces in URL
 func EncodeURL(input string) string {
 	return strings.ReplaceAll(input, " ", "%20")
 }
 
-// Refresh the long-lived access token for the Threads API
+// RefreshToken refreshes the long-lived access token for the Threads API
 func RefreshToken(ctx context.Context, refreshToken string) (string, error) {
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "RefreshToken")
@@ -159,7 +164,12 @@ func RefreshToken(ctx context.Context, refreshToken string) (string, error) {
 		ctxLog.Error("Failed to send request", "error", err)
 		return "", fmt.Errorf("failed to send request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			ctxLog.Error("Failed to close response body", "error", err)
+		}
+	}(resp.Body)
 
 	// Parse response
 	var tokenResp struct {
@@ -189,7 +199,12 @@ func ConvertToImages(ctx context.Context, pdfPath string) ([]image.Image, error)
 		ctxLog.Error("Failed to open PDF", "error", err)
 		return nil, fmt.Errorf("failed to open PDF: %v", err)
 	}
-	defer doc.Close()
+	defer func(doc *fitz.Document) {
+		err := doc.Close()
+		if err != nil {
+			ctxLog.Error("Failed to close document", "error", err)
+		}
+	}(doc)
 
 	numPages := doc.NumPage()
 	ctxLog.Debug("Converting PDF to images", "pages", numPages)
