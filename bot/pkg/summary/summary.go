@@ -54,7 +54,10 @@ func (s *Summarizer) Close() {
 
 	if s.client != nil {
 		ctxLog.Info("Closing Gemini client")
-		s.client.Close()
+		err := s.client.Close()
+		if err != nil {
+			fmt.Printf("Error closing Gemini client: %v", err)
+		}
 	}
 }
 
