@@ -54,7 +54,10 @@ func (s *Summarizer) Close() {
 
 	if s.client != nil {
 		ctxLog.Info("Closing Gemini client")
-		s.client.Close()
+		err := s.client.Close()
+		if err != nil {
+			fmt.Printf("Error closing Gemini client: %v", err)
+		}
 	}
 }
 
@@ -144,7 +147,12 @@ func (s *Summarizer) uploadFile(ctx context.Context, path, mimeType string) (str
 		ctxLog.Error("Error opening file", "error", err)
 		return "", fmt.Errorf("error opening file: %w", err)
 	}
-	defer file.Close()
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+			ctxLog.Error("Error closing file", "error", err)
+		}
+	}(file)
 
 	options := genai.UploadFileOptions{
 		DisplayName: path,

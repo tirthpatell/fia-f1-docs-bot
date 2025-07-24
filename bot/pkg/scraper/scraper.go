@@ -232,7 +232,12 @@ func (s *Scraper) DownloadDocument(ctx context.Context, doc Document, directory 
 		ctxLog.Error("Error downloading document", "error", err)
 		return "", fmt.Errorf("error downloading document: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			ctxLog.Error("Error closing response body", "error", err)
+		}
+	}(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		ctxLog.Error("Unexpected status code", "status", resp.StatusCode)
@@ -249,7 +254,12 @@ func (s *Scraper) DownloadDocument(ctx context.Context, doc Document, directory 
 		ctxLog.Error("Error creating file", "path", filePath, "error", err)
 		return "", fmt.Errorf("error creating file: %v", err)
 	}
-	defer out.Close()
+	defer func(out *os.File) {
+		err := out.Close()
+		if err != nil {
+			ctxLog.Error("Error closing file writer", "path", filePath, "error", err)
+		}
+	}(out)
 
 	// Write the body to file
 	_, err = io.Copy(out, resp.Body)
@@ -261,7 +271,10 @@ func (s *Scraper) DownloadDocument(ctx context.Context, doc Document, directory 
 	// Verify the downloaded file is a valid PDF
 	if err := s.verifyPDF(filePath); err != nil {
 		// If verification fails, it might be a recalled document that wasn't properly marked
-		os.Remove(filePath) // Clean up the invalid file
+		err := os.Remove(filePath)
+		if err != nil {
+			return "", fmt.Errorf("error removing file: %v", err)
+		} // Clean up the invalid file
 		ctxLog.Warn("Invalid PDF file detected, possibly recalled", "error", err)
 		return "", fmt.Errorf("invalid PDF file (possibly recalled): %v", err)
 	}
@@ -284,7 +297,12 @@ func (s *Scraper) verifyPDF(filePath string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+			fmt.Printf("Error closing file: %v", err)
+		}
+	}(file)
 
 	// Read the first few bytes to check for PDF signature
 	header := make([]byte, 5)
@@ -298,7 +316,7 @@ func (s *Scraper) verifyPDF(filePath string) error {
 		return fmt.Errorf("file does not have a valid PDF signature")
 	}
 
-	// Check file size - extremely small PDFs are suspicious
+	// Check file size - tiny PDFs are suspicious
 	fileInfo, err := file.Stat()
 	if err != nil {
 		return err

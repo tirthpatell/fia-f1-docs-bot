@@ -145,11 +145,6 @@ func SetDefaultLogger(logger *Logger) {
 	defaultLogger = logger
 }
 
-// GetDefaultLogger returns the default logger
-func GetDefaultLogger() *Logger {
-	return defaultLogger
-}
-
 // Package returns a logger for a specific package
 func Package(pkg string) *Logger {
 	if defaultLogger == nil {

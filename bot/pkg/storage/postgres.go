@@ -90,7 +90,10 @@ func NewPostgres(host, port, user, password, dbname, sslmode string) (StorageInt
 			`)
 
 			if err != nil {
-				tx.Rollback()
+				err := tx.Rollback()
+				if err != nil {
+					return nil, fmt.Errorf("error rolling back transaction: %v", err)
+				}
 				ctxLog.Error("Error dropping constraint", "error", err)
 				return nil, fmt.Errorf("error dropping constraint: %v", err)
 			}
@@ -101,7 +104,10 @@ func NewPostgres(host, port, user, password, dbname, sslmode string) (StorageInt
 			`)
 
 			if err != nil {
-				tx.Rollback()
+				err := tx.Rollback()
+				if err != nil {
+					return nil, fmt.Errorf("error rolling back transaction: %v", err)
+				}
 				ctxLog.Error("Error adding new constraint", "error", err)
 				return nil, fmt.Errorf("error adding new constraint: %v", err)
 			}
