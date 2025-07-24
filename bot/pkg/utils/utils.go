@@ -127,7 +127,7 @@ func (c *Client) UploadImage(ctx context.Context, img image.Image) (string, erro
 	}
 
 	// Construct the image URL from the response ID
-	imageURL := fmt.Sprintf("%s/i/%s.png", c.BaseURL, picsurResp.Data.ID)
+	imageURL := fmt.Sprintf("%s/i/%s.jpg", c.BaseURL, picsurResp.Data.ID)
 	ctxLog.Debug("Image uploaded successfully", "url", imageURL)
 	return imageURL, nil
 }
