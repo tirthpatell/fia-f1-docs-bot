@@ -149,7 +149,7 @@ func main() {
 
 	appLog.Info("Initializing scraper and poster")
 	sc := scraper.New(cfg.FIAUrl)
-	poster := poster.New(cfg.ThreadsAccessToken, cfg.ThreadsUserID, cfg.PicsurAPI, cfg.PicsurURL, cfg.ShortenerAPIKey, cfg.ShortenerURL)
+	pstr := poster.New(cfg.ThreadsAccessToken, cfg.ThreadsUserID, cfg.PicsurAPI, cfg.PicsurURL, cfg.ShortenerAPIKey, cfg.ShortenerURL)
 
 	appLog.Info("Service initialization complete, entering main loop")
 
@@ -204,7 +204,7 @@ func main() {
 
 				// Process recalled document specially
 				cycleLog.Info("Posting recalled document notice")
-				err := postRecalledDocumentNotice(cycleCtx, poster, doc)
+				err := postRecalledDocumentNotice(cycleCtx, pstr, doc)
 				if err != nil {
 					cycleLog.Error("Error posting recalled document notice", "error", err)
 					// Skip marking as processed if posting the notice failed, allow retry next cycle
@@ -242,7 +242,7 @@ func main() {
 					WithContext("component", "document_processor")
 
 				docLog.Info(fmt.Sprintf("Processing new document: %s", document.Title))
-				processDocument(docCtx, document, sc, summarizer, poster, store, cfg)
+				processDocument(docCtx, document, sc, summarizer, pstr, store)
 			}(doc)
 		}
 
@@ -260,7 +260,7 @@ func main() {
 }
 
 // processDocument handles all steps for a single document
-func processDocument(ctx context.Context, doc *scraper.Document, scraper *scraper.Scraper, summarizer *summary.Summarizer, poster *poster.Poster, store storage.StorageInterface, cfg *config.Config) {
+func processDocument(ctx context.Context, doc *scraper.Document, scraper *scraper.Scraper, summarizer *summary.Summarizer, poster *poster.Poster, store storage.StorageInterface) {
 	// Get logger from context for this document
 	docLog := log.WithRequestContext(ctx).
 		WithContext("component", "document_processor")
@@ -271,7 +271,12 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 		docLog.Error("Error creating directory for document", "error", err)
 		return
 	}
-	defer os.RemoveAll(docDir) // Clean up when done
+	defer func(path string) {
+		err := os.RemoveAll(path)
+		if err != nil {
+			docLog.Error("Error removing directory for document", "error", err)
+		}
+	}(docDir) // Clean up when done
 
 	// Download the document
 	docLog.Debug("Downloading document")

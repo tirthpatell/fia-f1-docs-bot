@@ -62,7 +62,7 @@ func (p *Poster) Post(ctx context.Context, images []image.Image, title string, p
 
 	// Upload images to Picsur
 	ctxLog.Debug("Uploading images to Picsur", "count", len(images))
-	imageURLs, err := p.uploadImages(ctx, images, title)
+	imageURLs, err := p.uploadImages(ctx, images)
 	if err != nil {
 		ctxLog.Error("Failed to upload images", "error", err)
 		return err
@@ -138,7 +138,7 @@ func (p *Poster) PostTextOnly(ctx context.Context, text string) error {
 }
 
 // uploadImages uploads images to Picsur and returns their URLs
-func (p *Poster) uploadImages(ctx context.Context, images []image.Image, title string) ([]string, error) {
+func (p *Poster) uploadImages(ctx context.Context, images []image.Image) ([]string, error) {
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "uploadImages").
 		WithContext("imageCount", len(images))
@@ -146,16 +146,13 @@ func (p *Poster) uploadImages(ctx context.Context, images []image.Image, title s
 	var imageURLs []string
 
 	for i, img := range images {
-		imgTitle := fmt.Sprintf("%s - Page %d", title, i+1)
-		imgDescription := fmt.Sprintf("Page %d of document: %s", i+1, title)
-
 		// Add a small delay between uploads to prevent overwhelming the service
 		if i > 0 {
 			time.Sleep(500 * time.Millisecond)
 		}
 
 		ctxLog.Debug("Uploading image", "index", i+1)
-		imageURL, err := p.PicsurClient.UploadImage(ctx, img, imgTitle, imgDescription)
+		imageURL, err := p.PicsurClient.UploadImage(ctx, img)
 		if err != nil {
 			ctxLog.Error("Failed to upload image", "index", i+1, "error", err)
 			return nil, fmt.Errorf("failed to upload image %d: %v", i+1, err)
@@ -213,14 +210,14 @@ func (p *Poster) postCarousel(ctx context.Context, imageURLs []string, postText 
 	var itemIDs []string
 
 	// Create item containers for each image in the carousel
-	for i, url := range imageURLs {
+	for i, imageURL := range imageURLs {
 		// Add a small delay between container creations
 		if i > 0 {
 			time.Sleep(500 * time.Millisecond)
 		}
 
 		ctxLog.Debug("Creating item container for carousel image", "index", i+1)
-		itemID, err := p.createItemContainer(ctx, url, true)
+		itemID, err := p.createItemContainer(ctx, imageURL, true)
 		if err != nil {
 			ctxLog.Error("Failed to create item container", "index", i+1, "error", err)
 			return fmt.Errorf("failed to create item container: %v", err)
@@ -358,11 +355,11 @@ func (p *Poster) publishMedia(ctx context.Context, mediaID string) error {
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "publishMedia")
 
-	url := fmt.Sprintf("https://graph.threads.net/v1.0/%s/threads_publish", p.UserID)
+	urlToPublish := fmt.Sprintf("https://graph.threads.net/v1.0/%s/threads_publish", p.UserID)
 	payload := fmt.Sprintf("creation_id=%s&access_token=%s", mediaID, p.AccessToken)
 
 	ctxLog.Debug("Publishing media", "mediaID", mediaID)
-	_, err := p.makePostRequest(ctx, url, payload)
+	_, err := p.makePostRequest(ctx, urlToPublish, payload)
 	return err
 }
 
@@ -371,11 +368,11 @@ func (p *Poster) publishCarousel(ctx context.Context, carouselID string) error {
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "publishCarousel")
 
-	url := fmt.Sprintf("https://graph.threads.net/v1.0/%s/threads_publish", p.UserID)
+	urlToPublish := fmt.Sprintf("https://graph.threads.net/v1.0/%s/threads_publish", p.UserID)
 	payload := fmt.Sprintf("creation_id=%s&access_token=%s", carouselID, p.AccessToken)
 
 	ctxLog.Debug("Publishing carousel", "carouselID", carouselID)
-	_, err := p.makePostRequest(ctx, url, payload)
+	_, err := p.makePostRequest(ctx, urlToPublish, payload)
 	return err
 }
 
@@ -390,7 +387,12 @@ func (p *Poster) makePostRequest(ctx context.Context, url, payload string) (stri
 		ctxLog.Error("HTTP request failed", "error", err)
 		return "", fmt.Errorf("HTTP request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			ctxLog.Error("Failed to close response body", "error", err)
+		}
+	}(resp.Body)
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
