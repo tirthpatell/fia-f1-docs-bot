@@ -17,15 +17,18 @@ type Config struct {
 	DBSSLMode  string `mapstructure:"DB_SSL_MODE"`
 
 	// Other configuration
-	FIAUrl             string `mapstructure:"FIA_URL"`
-	ThreadsAccessToken string `mapstructure:"THREADS_ACCESS_TOKEN"`
-	ThreadsUserID      string `mapstructure:"THREADS_USER_ID"`
-	ScrapeInterval     int    `mapstructure:"SCRAPE_INTERVAL"`
-	GeminiAPIKey       string `mapstructure:"GEMINI_API_KEY"`
-	PicsurAPI          string `mapstructure:"PICSUR_API"`
-	PicsurURL          string `mapstructure:"PICSUR_URL"`
-	ShortenerAPIKey    string `mapstructure:"SHORTENER_API_KEY"`
-	ShortenerURL       string `mapstructure:"SHORTENER_URL"`
+	FIAUrl              string `mapstructure:"FIA_URL"`
+	ThreadsAccessToken  string `mapstructure:"THREADS_ACCESS_TOKEN"`
+	ThreadsUserID       string `mapstructure:"THREADS_USER_ID"`
+	ThreadsClientID     string `mapstructure:"THREADS_CLIENT_ID"`
+	ThreadsClientSecret string `mapstructure:"THREADS_CLIENT_SECRET"`
+	ThreadsRedirectURI  string `mapstructure:"THREADS_REDIRECT_URI"`
+	ScrapeInterval      int    `mapstructure:"SCRAPE_INTERVAL"`
+	GeminiAPIKey        string `mapstructure:"GEMINI_API_KEY"`
+	PicsurAPI           string `mapstructure:"PICSUR_API"`
+	PicsurURL           string `mapstructure:"PICSUR_URL"`
+	ShortenerAPIKey     string `mapstructure:"SHORTENER_API_KEY"`
+	ShortenerURL        string `mapstructure:"SHORTENER_URL"`
 }
 
 // Load loads the configuration from environment variables and .env file.
@@ -54,6 +57,15 @@ func Load() (*Config, error) {
 	}
 	if cfg.ThreadsUserID == "" {
 		return nil, fmt.Errorf("THREADS_USER_ID is required")
+	}
+	if cfg.ThreadsClientID == "" {
+		return nil, fmt.Errorf("THREADS_CLIENT_ID is required")
+	}
+	if cfg.ThreadsClientSecret == "" {
+		return nil, fmt.Errorf("THREADS_CLIENT_SECRET is required")
+	}
+	if cfg.ThreadsRedirectURI == "" {
+		return nil, fmt.Errorf("THREADS_REDIRECT_URI is required")
 	}
 	if cfg.PicsurAPI == "" {
 		return nil, fmt.Errorf("PICSUR_API is required")

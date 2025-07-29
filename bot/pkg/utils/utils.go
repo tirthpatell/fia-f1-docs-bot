@@ -137,56 +137,6 @@ func EncodeURL(input string) string {
 	return strings.ReplaceAll(input, " ", "%20")
 }
 
-// RefreshToken refreshes the long-lived access token for the Threads API
-func RefreshToken(ctx context.Context, refreshToken string) (string, error) {
-	ctxLog := log.WithRequestContext(ctx).
-		WithContext("method", "RefreshToken")
-
-	// Prepare request
-	url := "https://graph.threads.net/refresh_access_token"
-	ctxLog.Info("Refreshing Threads access token")
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		ctxLog.Error("Failed to create request", "error", err)
-		return "", fmt.Errorf("failed to create request: %v", err)
-	}
-
-	// Add query parameters
-	q := req.URL.Query()
-	q.Add("grant_type", "th_refresh_token")
-	q.Add("access_token", refreshToken)
-	req.URL.RawQuery = q.Encode()
-
-	// Send request
-	ctxLog.Debug("Sending token refresh request")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		ctxLog.Error("Failed to send request", "error", err)
-		return "", fmt.Errorf("failed to send request: %v", err)
-	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			ctxLog.Error("Failed to close response body", "error", err)
-		}
-	}(resp.Body)
-
-	// Parse response
-	var tokenResp struct {
-		AccessToken string `json:"access_token"`
-		TokenType   string `json:"token_type"`
-		ExpiresIn   int    `json:"expires_in"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		ctxLog.Error("Failed to decode response", "error", err)
-		return "", fmt.Errorf("failed to decode response: %v", err)
-	}
-
-	expiresInDays := tokenResp.ExpiresIn / (24 * 3600)
-	ctxLog.Info("Access token refreshed successfully", "expires_in_days", expiresInDays)
-	return tokenResp.AccessToken, nil
-}
-
 // ConvertToImages converts a PDF document to a slice of images
 func ConvertToImages(ctx context.Context, pdfPath string) ([]image.Image, error) {
 	ctxLog := log.WithRequestContext(ctx).

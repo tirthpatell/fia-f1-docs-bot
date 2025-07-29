@@ -143,6 +143,13 @@ func New(cfg Config) *Logger {
 // SetDefaultLogger sets the default logger used throughout the application
 func SetDefaultLogger(logger *Logger) {
 	defaultLogger = logger
+	
+	// Recreate all existing package loggers with the new default logger
+	loggersMu.Lock()
+	for pkg := range loggers {
+		loggers[pkg] = defaultLogger.WithContext("package", pkg)
+	}
+	loggersMu.Unlock()
 }
 
 // Package returns a logger for a specific package
