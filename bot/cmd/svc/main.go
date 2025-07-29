@@ -127,11 +127,14 @@ func main() {
 
 	appLog.Info("Initializing scraper and poster")
 	sc := scraper.New(cfg.FIAUrl)
+	appLog.Info("Scraper initialized successfully")
+
 	pstr, err := poster.New(cfg.ThreadsAccessToken, cfg.ThreadsUserID, cfg.ThreadsClientID, cfg.ThreadsClientSecret, cfg.ThreadsRedirectURI, cfg.PicsurAPI, cfg.PicsurURL, cfg.ShortenerAPIKey, cfg.ShortenerURL)
 	if err != nil {
 		appLog.Error("Failed to initialize poster", "error", err)
 		os.Exit(1)
 	}
+	appLog.Info("Poster initialized successfully")
 
 	appLog.Info("Service initialization complete, entering main loop")
 

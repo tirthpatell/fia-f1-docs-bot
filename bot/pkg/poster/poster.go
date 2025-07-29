@@ -44,6 +44,7 @@ func New(accessToken, userID, clientID, clientSecret, redirectURI, picsurAPI, pi
 		ctxLog.Error("Failed to create threads client", "error", err)
 		return nil, fmt.Errorf("failed to create threads client: %w", err)
 	}
+	ctxLog.Info("Threads client initialized successfully")
 
 	return &Poster{
 		ThreadsClient:   threadsClient,
