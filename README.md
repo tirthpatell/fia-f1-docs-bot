@@ -37,6 +37,10 @@ This bot aims to make FIA F1 decision documents more accessible by automatically
 - Picsur instance for image hosting (self-hosted or third-party)
 - URL shortener service for document links
 
+## Technical Implementation
+
+This bot uses the [Threads Go client library](https://pkg.go.dev/github.com/tirthpatell/threads-go) to interact with the Threads API, providing a clean and efficient way to post content to Threads without handling raw HTTP requests.
+
 ## Quick Start with Docker
 
 1. Pull the Docker image:
@@ -48,8 +52,15 @@ This bot aims to make FIA F1 decision documents more accessible by automatically
    ```
    FIA_URL=https://www.fia.com/documents/championships/fia-formula-one-world-championship-14/season/season-2025-2071
    SCRAPE_INTERVAL=300
+   
+   # Threads API Configuration (required for Threads Go client)
    THREADS_USER_ID=your_threads_user_id_here
    THREADS_ACCESS_TOKEN=your_threads_access_token_here
+   THREADS_CLIENT_ID=your_threads_client_id_here
+   THREADS_CLIENT_SECRET=your_threads_client_secret_here
+   THREADS_REDIRECT_URI=your_threads_redirect_uri_here
+   
+   # AI and External Services
    GEMINI_API_KEY=your_google_gemini_api_key_here
    PICSUR_API=your_picsur_api_key_here
    PICSUR_URL=https://picsur.example.com
@@ -144,6 +155,15 @@ Contributions are welcome! Here's how you can contribute to the project:
 3. Make your changes and commit them: `git commit -m 'Add some feature'`
 4. Push to the branch: `git push origin feature-branch-name`
 5. Submit a pull request
+
+## Dependencies
+
+This project uses several key dependencies:
+
+- **[Threads Go Client](https://pkg.go.dev/github.com/tirthpatell/threads-go)**: Official Go client library for interacting with the Threads API
+- **[Colly](https://github.com/gocolly/colly)**: Web scraping framework for Go
+- **[Google Generative AI](https://github.com/google/generative-ai-go)**: Go client for Google's Generative AI (Gemini)
+- **[go-fitz](https://github.com/gen2brain/go-fitz)**: PDF processing library for Go
 
 ## Security
 
