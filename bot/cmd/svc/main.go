@@ -93,28 +93,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Automatically run this every 45 days to refresh the long-lived access token
-	go func() {
-		tokenCtx, _ := logger.NewRequestContext()
-		tokenLog := log.WithRequestContext(tokenCtx).WithContext("component", "token_refresher")
-
-		for {
-			// Refresh the long-lived access token
-			tokenLog.Info("Refreshing access token")
-			newToken, err := utils.RefreshToken(tokenCtx, cfg.ThreadsAccessToken)
-			if err != nil {
-				tokenLog.Error("Error refreshing token", "error", err)
-			} else {
-				tokenLog.Info("Successfully refreshed token")
-				cfg.ThreadsAccessToken = newToken
-			}
-
-			// Sleep for 45 days
-			tokenLog.Info("Sleeping until next token refresh", "days", 45)
-			time.Sleep(45 * 24 * time.Hour)
-		}
-	}()
-
 	// Initialize storage based on configuration
 	appLog.Info("Initializing PostgreSQL storage")
 	store, err := storage.NewPostgres(
@@ -149,9 +127,48 @@ func main() {
 
 	appLog.Info("Initializing scraper and poster")
 	sc := scraper.New(cfg.FIAUrl)
-	pstr := poster.New(cfg.ThreadsAccessToken, cfg.ThreadsUserID, cfg.PicsurAPI, cfg.PicsurURL, cfg.ShortenerAPIKey, cfg.ShortenerURL)
+	pstr, err := poster.New(cfg.ThreadsAccessToken, cfg.ThreadsUserID, cfg.ThreadsClientID, cfg.ThreadsClientSecret, cfg.ThreadsRedirectURI, cfg.PicsurAPI, cfg.PicsurURL, cfg.ShortenerAPIKey, cfg.ShortenerURL)
+	if err != nil {
+		appLog.Error("Failed to initialize poster", "error", err)
+		os.Exit(1)
+	}
 
 	appLog.Info("Service initialization complete, entering main loop")
+
+	// Start a goroutine to periodically check and refresh token
+	go func() {
+		tokenCtx, _ := logger.NewRequestContext()
+		tokenLog := log.WithRequestContext(tokenCtx).WithContext("component", "token_refresher")
+
+		// Initial delay to let the service start
+		time.Sleep(5 * time.Second)
+
+		for {
+			tokenLog.Debug("Checking token status")
+
+			// Check if token needs refresh
+			if pstr.ThreadsClient.IsTokenExpired() {
+				tokenLog.Info("Token is expired, attempting to refresh")
+				if err := pstr.ThreadsClient.RefreshToken(tokenCtx); err != nil {
+					tokenLog.Error("Failed to refresh expired token", "error", err)
+				} else {
+					tokenLog.Info("Token refreshed successfully")
+				}
+			} else if pstr.ThreadsClient.IsTokenExpiringSoon(240 * time.Hour) {
+				tokenLog.Info("Token is expiring soon, refreshing proactively")
+				if err := pstr.ThreadsClient.RefreshToken(tokenCtx); err != nil {
+					tokenLog.Warn("Failed to proactively refresh token", "error", err)
+				} else {
+					tokenLog.Info("Token refreshed successfully")
+				}
+			} else {
+				tokenLog.Debug("Token is still valid")
+			}
+
+			// Check every 24 hours
+			time.Sleep(24 * time.Hour)
+		}
+	}()
 
 	for {
 		// Create a new context for each check cycle
@@ -378,7 +395,7 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 // postRecalledDocumentNotice posts a text-only message about a recalled document
 func postRecalledDocumentNotice(ctx context.Context, poster *poster.Poster, doc *scraper.Document) error {
 	// Create a message about the recalled document
-	message := fmt.Sprintf("🚫 DOCUMENT RECALLED 🚫\n\nThe FIA has recalled the following document:\n\n%s\n\nPublished: %s\n\nThis document is no longer available.\n\n#F1Threads",
+	message := fmt.Sprintf("🚫 DOCUMENT RECALLED 🚫\n\nThe FIA has recalled the following document:\n\n%s\n\nPublished: %s\n\nThis document is no longer available.",
 		doc.Title,
 		doc.Published.Format("02-01-2006 15:04 MST"))
 

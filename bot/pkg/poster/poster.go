@@ -2,17 +2,15 @@ package poster
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"image"
-	"io"
-	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"bot/pkg/logger"
 	"bot/pkg/utils"
+
+	"github.com/tirthpatell/threads-go"
 )
 
 // Package logger
@@ -21,32 +19,37 @@ var log = logger.Package("poster")
 const (
 	maxCharacterLimit = 500
 	ellipsis          = "..."
+	TopicTag          = "F1Threads"
 )
-
-// Helper function for URL encoding
-func encodeText(text string) string {
-	return strings.ReplaceAll(url.QueryEscape(text), "+", "%20")
-}
 
 // Poster is a struct that holds the configuration for the poster
 type Poster struct {
-	AccessToken     string
-	UserID          string
+	ThreadsClient   *threads.Client
 	PicsurClient    *utils.Client
 	ShortenerClient *utils.ShortenerClient
 }
 
 // New creates a new Poster
-func New(accessToken, userID, picsurAPI, picsurURL, shortenerAPIKey, shortenerURL string) *Poster {
+func New(accessToken, userID, clientID, clientSecret, redirectURI, picsurAPI, picsurURL, shortenerAPIKey, shortenerURL string) (*Poster, error) {
 	ctxLog := log.WithContext("method", "New")
 	ctxLog.Info("Creating new poster client")
 
+	// Create threads client with existing token
+	threadsClient, err := threads.NewClientWithToken(accessToken, &threads.Config{
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		RedirectURI:  redirectURI,
+	})
+	if err != nil {
+		ctxLog.Error("Failed to create threads client", "error", err)
+		return nil, fmt.Errorf("failed to create threads client: %w", err)
+	}
+
 	return &Poster{
-		AccessToken:     accessToken,
-		UserID:          userID,
+		ThreadsClient:   threadsClient,
 		PicsurClient:    utils.New(picsurAPI, picsurURL),
 		ShortenerClient: utils.NewShortenerClient(shortenerAPIKey, shortenerURL),
-	}
+	}, nil
 }
 
 // Post posts the images to Threads
@@ -106,31 +109,14 @@ func (p *Poster) PostTextOnly(ctx context.Context, text string) error {
 
 	ctxLog.Info("Posting text-only message to Threads")
 
-	// Use the threads endpoint with text-only payload
-	threadsURL := fmt.Sprintf("https://graph.threads.net/v1.0/%s/threads", p.UserID)
-
-	// URL encode the text for the payload
-	encodedText := encodeText(text)
-
-	// Create the payload for a text-only post
-	payload := fmt.Sprintf("media_type=TEXT&text=%s&access_token=%s", encodedText, p.AccessToken)
-
-	// Make the API request to create the text-only post
-	mediaID, err := p.makePostRequest(ctx, threadsURL, payload)
+	// Use the threads-go client to create text post
+	_, err := p.ThreadsClient.CreateTextPost(ctx, &threads.TextPostContent{
+		Text:     text,
+		TopicTag: TopicTag,
+	})
 	if err != nil {
 		ctxLog.Error("Failed to create text-only post", "error", err)
 		return fmt.Errorf("failed to create text-only post: %v", err)
-	}
-
-	ctxLog.Debug("Created text-only post", "mediaID", mediaID)
-
-	ctxLog.Info("Waiting before publishing text-only post...")
-	time.Sleep(2 * time.Second)
-
-	// Publish the post
-	if err := p.publishMedia(ctx, mediaID); err != nil {
-		ctxLog.Error("Failed to publish text-only post", "error", err)
-		return fmt.Errorf("failed to publish text-only post: %v", err)
 	}
 
 	ctxLog.Debug("Text-only message posted successfully")
@@ -173,32 +159,21 @@ func (p *Poster) postSingleImage(ctx context.Context, imageURL, postText string)
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "postSingleImage")
 
-	ctxLog.Debug("Creating item container for single image", "url", imageURL)
+	ctxLog.Debug("Creating single image post", "url", imageURL)
 
-	// Create item container for the single image
-	itemID, err := p.createItemContainer(ctx, imageURL, false)
+	// Use the threads-go client to create image post
+	_, err := p.ThreadsClient.CreateImagePost(ctx, &threads.ImagePostContent{
+		Text:     postText,
+		ImageURL: imageURL,
+		TopicTag: TopicTag,
+	})
 	if err != nil {
-		ctxLog.Error("Failed to create item container", "error", err)
-		return fmt.Errorf("failed to create item container: %v", err)
+		ctxLog.Error("Failed to create image post", "error", err)
+		return fmt.Errorf("failed to create image post: %v", err)
 	}
 
-	// Small delay before creating media container
-	time.Sleep(1 * time.Second)
-
-	// Create media container with the image and text
-	ctxLog.Debug("Creating media container")
-	mediaID, err := p.createMediaContainer(ctx, itemID, postText, "IMAGE", imageURL)
-	if err != nil {
-		ctxLog.Error("Failed to create media container", "error", err)
-		return fmt.Errorf("failed to create media container: %v", err)
-	}
-
-	ctxLog.Info("Waiting before publishing...")
-	time.Sleep(1 * time.Second)
-
-	// Publish the media
-	ctxLog.Debug("Publishing media", "mediaID", mediaID)
-	return p.publishMedia(ctx, mediaID)
+	ctxLog.Debug("Successfully posted single image")
+	return nil
 }
 
 // postCarousel posts multiple images as a carousel to Threads
@@ -207,38 +182,38 @@ func (p *Poster) postCarousel(ctx context.Context, imageURLs []string, postText 
 		WithContext("method", "postCarousel").
 		WithContext("imageCount", len(imageURLs))
 
-	var itemIDs []string
+	var containerIDs []string
 
-	// Create item containers for each image in the carousel
+	// Create media containers for each image in the carousel
 	for i, imageURL := range imageURLs {
 		// Add a small delay between container creations
 		if i > 0 {
 			time.Sleep(500 * time.Millisecond)
 		}
 
-		ctxLog.Debug("Creating item container for carousel image", "index", i+1)
-		itemID, err := p.createItemContainer(ctx, imageURL, true)
+		ctxLog.Debug("Creating media container for carousel image", "index", i+1)
+		containerID, err := p.ThreadsClient.CreateMediaContainer(ctx, threads.MediaTypeImage, imageURL, "")
 		if err != nil {
-			ctxLog.Error("Failed to create item container", "index", i+1, "error", err)
-			return fmt.Errorf("failed to create item container: %v", err)
+			ctxLog.Error("Failed to create media container", "index", i+1, "error", err)
+			return fmt.Errorf("failed to create media container: %v", err)
 		}
-		itemIDs = append(itemIDs, itemID)
+		containerIDs = append(containerIDs, string(containerID))
 	}
 
-	// Create carousel container
-	ctxLog.Debug("Creating carousel container", "itemCount", len(itemIDs))
-	carouselID, err := p.createCarouselContainer(ctx, itemIDs, postText)
+	// Create carousel post
+	ctxLog.Debug("Creating carousel post", "itemCount", len(containerIDs))
+	_, err := p.ThreadsClient.CreateCarouselPost(ctx, &threads.CarouselPostContent{
+		Text:     postText,
+		Children: containerIDs,
+		TopicTag: TopicTag,
+	})
 	if err != nil {
-		ctxLog.Error("Failed to create carousel container", "error", err)
-		return fmt.Errorf("failed to create carousel container: %v", err)
+		ctxLog.Error("Failed to create carousel post", "error", err)
+		return fmt.Errorf("failed to create carousel post: %v", err)
 	}
 
-	ctxLog.Info("Waiting before publishing...")
-	time.Sleep(3 * time.Second)
-
-	// Publish the carousel
-	ctxLog.Debug("Publishing carousel", "carouselID", carouselID)
-	return p.publishCarousel(ctx, carouselID)
+	ctxLog.Debug("Successfully posted carousel")
+	return nil
 }
 
 // formatPostText formats the text for a post
@@ -270,15 +245,13 @@ func (p *Poster) formatPostText(ctx context.Context, title string, publishTime t
 			title, publishTime.Format("02-01-2006 15:04 MST"))
 	}
 
-	// Calculate remaining characters for the AI summary
-	suffix := "\n\n#F1Threads"
-	remainingChars := maxCharacterLimit - len(baseText) - len(suffix)
+	remainingChars := maxCharacterLimit - len(baseText)
 
 	// Truncate AI summary if needed
 	truncatedSummary := truncateText(aiSummary, remainingChars)
 
 	// Combine all parts
-	return baseText + truncatedSummary + suffix, nil
+	return baseText + truncatedSummary, nil
 }
 
 // truncateText truncates text to the specified limit, adding an ellipsis
@@ -301,123 +274,4 @@ func truncateText(text string, limit int) string {
 	}
 
 	return text[:lastSpace] + ellipsis
-}
-
-// createItemContainer creates an item container for the image
-func (p *Poster) createItemContainer(ctx context.Context, imageURL string, isCarouselItem bool) (string, error) {
-	ctxLog := log.WithRequestContext(ctx).
-		WithContext("method", "createItemContainer")
-
-	apiEndpoint := fmt.Sprintf("https://graph.threads.net/v1.0/%s/threads", p.UserID)
-	payload := fmt.Sprintf("media_type=IMAGE&image_url=%s&is_carousel_item=%t&access_token=%s",
-		imageURL, isCarouselItem, p.AccessToken)
-
-	ctxLog.Debug("Making container request", "isCarouselItem", isCarouselItem)
-	return p.makePostRequest(ctx, apiEndpoint, payload)
-}
-
-// createMediaContainer creates a media container for a single image post
-func (p *Poster) createMediaContainer(ctx context.Context, itemID, text, mediaType, imageURL string) (string, error) {
-	ctxLog := log.WithRequestContext(ctx).
-		WithContext("method", "createMediaContainer")
-
-	apiEndpoint := fmt.Sprintf("https://graph.threads.net/v1.0/%s/threads", p.UserID)
-
-	// URL encode the text
-	encodedText := encodeText(text)
-
-	payload := fmt.Sprintf("media_type=%s&text=%s&children=%s&image_url=%s&access_token=%s",
-		mediaType, encodedText, itemID, imageURL, p.AccessToken)
-
-	ctxLog.Debug("Creating media container", "mediaType", mediaType, "itemID", itemID)
-	return p.makePostRequest(ctx, apiEndpoint, payload)
-}
-
-// createCarouselContainer creates a carousel container for the images
-func (p *Poster) createCarouselContainer(ctx context.Context, itemIDs []string, text string) (string, error) {
-	ctxLog := log.WithRequestContext(ctx).
-		WithContext("method", "createCarouselContainer")
-
-	apiEndpoint := fmt.Sprintf("https://graph.threads.net/v1.0/%s/threads", p.UserID)
-
-	// URL encode the text
-	encodedText := encodeText(text)
-
-	payload := fmt.Sprintf("media_type=CAROUSEL&children=%s&text=%s&access_token=%s",
-		strings.Join(itemIDs, ","), encodedText, p.AccessToken)
-
-	ctxLog.Debug("Creating carousel container", "itemCount", len(itemIDs))
-	return p.makePostRequest(ctx, apiEndpoint, payload)
-}
-
-// publishMedia publishes a single image post to Threads
-func (p *Poster) publishMedia(ctx context.Context, mediaID string) error {
-	ctxLog := log.WithRequestContext(ctx).
-		WithContext("method", "publishMedia")
-
-	urlToPublish := fmt.Sprintf("https://graph.threads.net/v1.0/%s/threads_publish", p.UserID)
-	payload := fmt.Sprintf("creation_id=%s&access_token=%s", mediaID, p.AccessToken)
-
-	ctxLog.Debug("Publishing media", "mediaID", mediaID)
-	_, err := p.makePostRequest(ctx, urlToPublish, payload)
-	return err
-}
-
-// publishCarousel publishes the carousel to Threads
-func (p *Poster) publishCarousel(ctx context.Context, carouselID string) error {
-	ctxLog := log.WithRequestContext(ctx).
-		WithContext("method", "publishCarousel")
-
-	urlToPublish := fmt.Sprintf("https://graph.threads.net/v1.0/%s/threads_publish", p.UserID)
-	payload := fmt.Sprintf("creation_id=%s&access_token=%s", carouselID, p.AccessToken)
-
-	ctxLog.Debug("Publishing carousel", "carouselID", carouselID)
-	_, err := p.makePostRequest(ctx, urlToPublish, payload)
-	return err
-}
-
-// makePostRequest is a helper function to make POST requests to the Threads API
-func (p *Poster) makePostRequest(ctx context.Context, url, payload string) (string, error) {
-	ctxLog := log.WithRequestContext(ctx).
-		WithContext("method", "makePostRequest")
-
-	ctxLog.Debug("Making POST request", "url", url)
-	resp, err := http.Post(url, "application/x-www-form-urlencoded", strings.NewReader(payload))
-	if err != nil {
-		ctxLog.Error("HTTP request failed", "error", err)
-		return "", fmt.Errorf("HTTP request failed: %v", err)
-	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			ctxLog.Error("Failed to close response body", "error", err)
-		}
-	}(resp.Body)
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		ctxLog.Error("Failed to read response body", "error", err)
-		return "", fmt.Errorf("failed to read response body: %v", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		ctxLog.Error("Request failed", "status", resp.StatusCode, "body", string(body))
-		return "", fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		ctxLog.Error("Failed to parse response JSON", "error", err, "body", string(body))
-		return "", fmt.Errorf("failed to parse response JSON: %v - Body: %s", err, string(body))
-	}
-
-	if result.ID == "" {
-		ctxLog.Error("Received empty ID in response", "body", string(body))
-		return "", fmt.Errorf("received empty ID in response: %s", string(body))
-	}
-
-	ctxLog.Debug("Successfully received response", "id", result.ID)
-	return result.ID, nil
 }
