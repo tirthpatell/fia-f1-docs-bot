@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -137,6 +139,30 @@ func main() {
 	appLog.Info("Poster initialized successfully")
 
 	appLog.Info("Service initialization complete, entering main loop")
+
+	// Start pprof server for profiling if enabled
+	if cfg.PprofEnabled {
+		go func() {
+			pprofLog := log.WithContext("component", "pprof")
+			pprofPort := cfg.PprofPort
+			if pprofPort == "" {
+				pprofPort = "6060" // Default pprof port
+			}
+			
+			pprofLog.Info("Starting pprof server", "port", pprofPort)
+			pprofLog.Info("Available endpoints:", "endpoints", []string{
+				"http://localhost:" + pprofPort + "/debug/pprof/",
+				"http://localhost:" + pprofPort + "/debug/pprof/heap",
+				"http://localhost:" + pprofPort + "/debug/pprof/goroutine",
+				"http://localhost:" + pprofPort + "/debug/pprof/threadcreate",
+				"http://localhost:" + pprofPort + "/debug/pprof/block",
+				"http://localhost:" + pprofPort + "/debug/pprof/mutex",
+			})
+			if err := http.ListenAndServe(":"+pprofPort, nil); err != nil {
+				pprofLog.Error("Failed to start pprof server", "error", err)
+			}
+		}()
+	}
 
 	// Start a goroutine to periodically check and refresh token
 	go func() {

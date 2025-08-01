@@ -74,6 +74,10 @@ This bot uses the [Threads Go client library](https://pkg.go.dev/github.com/tirt
    DB_PASSWORD=your_secure_password
    DB_NAME=fiadocs
    DB_SSL_MODE=disable
+   
+   # Performance Profiling (optional)
+   PPROF_ENABLED=false
+   PPROF_PORT=6060
    ```
 
 3. Run the container:
@@ -81,6 +85,15 @@ This bot uses the [Threads Go client library](https://pkg.go.dev/github.com/tirt
    docker run -d \
      --name fia-f1-docs-bot \
      --env-file .env \
+     ptirth/fia-f1-docs-bot:latest
+   ```
+   
+   Or with pprof enabled for profiling:
+   ```sh
+   docker run -d \
+     --name fia-f1-docs-bot \
+     --env-file .env \
+     -p 6060:6060 \
      ptirth/fia-f1-docs-bot:latest
    ```
 
@@ -92,6 +105,8 @@ This bot uses the [Threads Go client library](https://pkg.go.dev/github.com/tirt
        env_file:
          - .env
        restart: unless-stopped
+       ports:
+         - "6060:6060"  # Only needed if PPROF_ENABLED=true
    ```
 
 ### Persistent Storage
@@ -145,6 +160,70 @@ Required environment variables for the URL shortener:
 - `SHORTENER_URL`: Base URL of the shortener service (e.g., https://shortener.example.com)
 
 The shortened URLs will be included in the post text, allowing users to easily access the original documents.
+
+### Performance Profiling with pprof
+
+The bot includes built-in support for Go's pprof profiling tool to help debug memory leaks and performance issues.
+
+To enable pprof:
+1. Add these environment variables to your `.env` file:
+   ```
+   PPROF_ENABLED=true
+   PPROF_PORT=6060  # Optional, defaults to 6060
+   ```
+
+2. When the bot is running with pprof enabled, you can access the following endpoints:
+   - `http://localhost:6060/debug/pprof/` - Profiling index page
+   - `http://localhost:6060/debug/pprof/heap` - Heap memory profile
+   - `http://localhost:6060/debug/pprof/goroutine` - Goroutine stack traces
+   - `http://localhost:6060/debug/pprof/threadcreate` - Thread creation profile
+   - `http://localhost:6060/debug/pprof/block` - Block contention profile
+   - `http://localhost:6060/debug/pprof/mutex` - Mutex contention profile
+
+3. Common pprof commands for memory leak detection:
+   ```sh
+   # Capture heap profile
+   go tool pprof http://localhost:6060/debug/pprof/heap
+   
+   # Compare heap profiles to find memory leaks
+   go tool pprof -base=heap1.prof heap2.prof
+   
+   # View live heap profile in browser
+   go tool pprof -http=:8080 http://localhost:6060/debug/pprof/heap
+   
+   # Get top memory allocations
+   curl http://localhost:6060/debug/pprof/heap > heap.prof
+   go tool pprof -top heap.prof
+   ```
+
+**Note:** Only enable pprof in development/testing environments as it exposes sensitive runtime information.
+
+#### Using pprof with Docker
+
+When running the bot in Docker with pprof enabled:
+
+1. Ensure you map the pprof port when starting the container:
+   ```sh
+   docker run -d \
+     --name fia-f1-docs-bot \
+     --env-file .env \
+     -p 6060:6060 \
+     ptirth/fia-f1-docs-bot:latest
+   ```
+
+2. Access pprof from your host machine:
+   ```sh
+   # View heap profile in browser
+   go tool pprof -http=:8080 http://localhost:6060/debug/pprof/heap
+   
+   # Save heap snapshot from Docker container
+   curl http://localhost:6060/debug/pprof/heap > docker-heap.prof
+   
+   # Analyze goroutines
+   go tool pprof http://localhost:6060/debug/pprof/goroutine
+   ```
+
+3. For docker-compose deployments, the port mapping is already configured in the compose file.
 
 ## Contributing
 

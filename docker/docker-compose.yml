@@ -8,6 +8,8 @@ services:
       - ../bot/.env.example
     volumes:
       - ../bot:/app
+    ports:
+      - "6060:6060"  # pprof port mapping
     networks:
       - app-network
 

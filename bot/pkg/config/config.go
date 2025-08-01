@@ -29,6 +29,10 @@ type Config struct {
 	PicsurURL           string `mapstructure:"PICSUR_URL"`
 	ShortenerAPIKey     string `mapstructure:"SHORTENER_API_KEY"`
 	ShortenerURL        string `mapstructure:"SHORTENER_URL"`
+	
+	// Profiling configuration
+	PprofEnabled        bool   `mapstructure:"PPROF_ENABLED"`
+	PprofPort           string `mapstructure:"PPROF_PORT"`
 }
 
 // Load loads the configuration from environment variables and .env file.
@@ -50,6 +54,8 @@ func Load() (*Config, error) {
 	viper.SetDefault("SCRAPE_INTERVAL", 30)
 	viper.SetDefault("DB_PORT", "5432")
 	viper.SetDefault("DB_SSL_MODE", "disable")
+	viper.SetDefault("PPROF_ENABLED", false)
+	viper.SetDefault("PPROF_PORT", "6060")
 
 	// Validate required fields
 	if cfg.ThreadsAccessToken == "" {
