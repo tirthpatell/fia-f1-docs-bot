@@ -25,6 +25,7 @@ type Config struct {
 
 // Models in order of preference
 var modelPriority = []string{
+	"gemini-2.5-flash-lite",
 	"gemini-2.0-flash-lite",
 	"gemini-2.0-flash",
 	"gemini-1.5-flash-8b",
@@ -83,7 +84,7 @@ func (s *Summarizer) GenerateSummary(ctx context.Context, pdfPath string) (strin
 		summary, err := s.tryGenerateSummaryWithModel(ctx, modelName, fileURI)
 		if err == nil {
 			// Success with this model
-			ctxLog.Debug("AI summary generated successfully", "model", modelName, "length", len(summary))
+			ctxLog.Info("AI summary generated successfully", "model", modelName, "length", len(summary))
 			return summary, nil
 		}
 

@@ -43,9 +43,18 @@ This bot uses the [Threads Go client library](https://pkg.go.dev/github.com/tirt
 
 ## Quick Start with Docker
 
-1. Pull the Docker image:
+### Using Docker Hub
+
+1. Pull the Docker image from Docker Hub:
    ```sh
    docker pull ptirth/fia-f1-docs-bot:latest
+   ```
+
+### Using GitHub Container Registry (GHCR)
+
+1. Pull the Docker image from GitHub Container Registry:
+   ```sh
+   docker pull ghcr.io/tirthpatell/fia-f1-docs-bot:latest
    ```
 
 2. Create a `.env` file with the following variables:
@@ -88,7 +97,7 @@ This bot uses the [Threads Go client library](https://pkg.go.dev/github.com/tirt
    ```yaml
    services:
      bot:
-       image: ptirth/fia-f1-docs-bot:latest
+       image: ptirth/fia-f1-docs-bot:latest  # or ghcr.io/tirthpatell/fia-f1-docs-bot:latest
        env_file:
          - .env
        restart: unless-stopped
@@ -105,6 +114,49 @@ To configure PostgreSQL:
 1. Set up a PostgreSQL database
 2. Configure the environment variables as shown in the Quick Start section
 3. The bot will automatically create the necessary tables in the database
+
+## Building and Publishing Docker Images
+
+### Manual Build to Multiple Registries
+
+To build and publish Docker images to both Docker Hub and GitHub Container Registry:
+
+1. **Set up authentication:**
+   
+   For Docker Hub:
+   ```sh
+   docker login
+   ```
+   
+   For GitHub Container Registry:
+   ```sh
+   # Create a Personal Access Token with 'write:packages' scope
+   docker login ghcr.io -u YOUR_GITHUB_USERNAME
+   ```
+
+2. **Run the multi-registry build script:**
+   ```sh
+   ./build-and-publish-multi-registry.sh
+   ```
+   
+   The script will prompt you to select which registries to push to.
+
+### Automated Builds with GitHub Actions
+
+This repository includes a GitHub Actions workflow that automatically builds and publishes Docker images to both Docker Hub and GitHub Container Registry when:
+- Tags are pushed (e.g., `v1.0.0`)
+- Commits are pushed to the `main` branch
+- Pull requests are opened (build only, no push)
+
+**Required GitHub Secrets:**
+- `DOCKER_USERNAME`: Your Docker Hub username
+- `DOCKER_TOKEN`: Your Docker Hub access token
+
+**Automatic Authentication:**
+- `GITHUB_TOKEN`: Automatically provided by GitHub Actions for GHCR authentication
+- No manual configuration needed for GitHub Container Registry
+
+The workflow uses `${{ secrets.GITHUB_TOKEN }}` which is automatically available in every GitHub Actions workflow with the necessary permissions to push to your repository's container registry.
 
 ## Local Development Setup
 
