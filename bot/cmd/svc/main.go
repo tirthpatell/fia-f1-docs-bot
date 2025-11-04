@@ -6,10 +6,12 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"bot/pkg/config"
@@ -67,11 +69,31 @@ func waitForDBConnection(ctx context.Context, store storage.StorageInterface) {
 }
 
 func main() {
-	// Initialize structured logger
+	// Record start time for uptime tracking
+	startTime := time.Now()
+
+	// Load configuration first (needed for logger configuration)
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Printf("Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Parse log level from config
+	logLevel, err := logger.ParseLevel(cfg.LogLevel)
+	if err != nil {
+		fmt.Printf("Invalid log level '%s', using 'info': %v\n", cfg.LogLevel, err)
+		logLevel = logger.LevelInfo
+	}
+
+	// Initialize structured logger with config-based settings
 	log = logger.New(logger.Config{
-		Level:       logger.LevelInfo,
-		AddSource:   true,
-		ServiceName: serviceName,
+		Level:          logLevel,
+		AddSource:      cfg.LogAddSource,
+		ServiceName:    serviceName,
+		Environment:    cfg.Environment,
+		Version:        cfg.Version,
+		SanitizeFields: true, // Enable sensitive data sanitization
 	})
 
 	// Set as the default logger for the entire application
@@ -81,13 +103,19 @@ func main() {
 	appCtx, _ := logger.NewRequestContext()
 	appLog := log.WithRequestContext(appCtx).WithContext("component", "main")
 
-	appLog.Info("Starting F1 Documents Bot service")
+	// Get hostname for lifecycle logging
+	hostname, _ := os.Hostname()
 
-	cfg, err := config.Load()
-	if err != nil {
-		appLog.Error("Failed to load config", "error", err)
-		os.Exit(1)
-	}
+	// Log application startup with detailed metadata
+	appLog.Info("Application starting",
+		"version", cfg.Version,
+		"environment", cfg.Environment,
+		"go_version", runtime.Version(),
+		"pid", os.Getpid(),
+		"hostname", hostname,
+		"log_level", logLevel,
+		"num_cpu", runtime.NumCPU(),
+	)
 
 	// Create temp directory if it doesn't exist
 	if err := os.MkdirAll(tempDir, 0755); err != nil {
@@ -138,7 +166,40 @@ func main() {
 	}
 	appLog.Info("Poster initialized successfully")
 
+	// Setup graceful shutdown
+	shutdownChan := make(chan os.Signal, 1)
+	signal.Notify(shutdownChan, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+
+	// Channel to coordinate shutdown
+	done := make(chan bool, 1)
+
 	appLog.Info("Service initialization complete, entering main loop")
+
+	// Setup health check endpoint
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		healthLog := log.WithContext("component", "health_check")
+
+		// Check database connection
+		dbHealthy := store.CheckConnection() == nil
+
+		uptime := time.Since(startTime)
+		goroutines := runtime.NumGoroutine()
+
+		healthLog.Debug("Health check requested",
+			"db_connected", dbHealthy,
+			"uptime_seconds", uptime.Seconds(),
+			"goroutines", goroutines,
+		)
+
+		if dbHealthy {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, "OK\nUptime: %s\nGoroutines: %d\n", uptime, goroutines)
+		} else {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprintf(w, "Database connection lost\nUptime: %s\nGoroutines: %d\n", uptime, goroutines)
+			healthLog.Warn("Health check failed - database connection lost")
+		}
+	})
 
 	// Start pprof server for profiling if enabled
 	if cfg.PprofEnabled {
@@ -148,9 +209,10 @@ func main() {
 			if pprofPort == "" {
 				pprofPort = "6060" // Default pprof port
 			}
-			
-			pprofLog.Info("Starting pprof server", "port", pprofPort)
+
+			pprofLog.Info("Starting pprof and health check server", "port", pprofPort)
 			pprofLog.Info("Available endpoints:", "endpoints", []string{
+				"http://localhost:" + pprofPort + "/health",
 				"http://localhost:" + pprofPort + "/debug/pprof/",
 				"http://localhost:" + pprofPort + "/debug/pprof/heap",
 				"http://localhost:" + pprofPort + "/debug/pprof/goroutine",
@@ -160,6 +222,17 @@ func main() {
 			})
 			if err := http.ListenAndServe(":"+pprofPort, nil); err != nil {
 				pprofLog.Error("Failed to start pprof server", "error", err)
+			}
+		}()
+	} else {
+		// Even if pprof is disabled, start a minimal health check server
+		go func() {
+			healthLog := log.WithContext("component", "health_server")
+			healthPort := "6060" // Use same port as pprof
+
+			healthLog.Info("Starting health check server", "port", healthPort)
+			if err := http.ListenAndServe(":"+healthPort, nil); err != nil {
+				healthLog.Error("Failed to start health check server", "error", err)
 			}
 		}()
 	}
@@ -199,110 +272,149 @@ func main() {
 		}
 	}()
 
-	for {
-		// Create a new context for each check cycle
-		cycleCtx, _ := logger.NewRequestContext()
-		cycleLog := log.WithRequestContext(cycleCtx).WithContext("component", "main_cycle")
+	// Start main processing loop in a goroutine
+	go func() {
+		defer func() {
+			done <- true
+		}()
 
-		cycleLog.Info("Checking for new documents")
+		for {
+			select {
+			case <-shutdownChan:
+				// Shutdown signal received, exit the loop
+				return
+			default:
+				// Continue with normal processing
+			}
 
-		// Check database connection before processing
-		// This will wait until connection is established
-		waitForDBConnection(cycleCtx, store)
+			// Create a new context for each check cycle
+			cycleCtx, _ := logger.NewRequestContext()
+			cycleLog := log.WithRequestContext(cycleCtx).WithContext("component", "main_cycle")
 
-		docs, err := sc.FetchLatestDocuments(cycleCtx, documentsToFetch)
-		if err != nil {
-			cycleLog.Error("Error fetching documents", "error", err)
-			cycleLog.Info("Sleeping before retrying", "seconds", cfg.ScrapeInterval)
-			time.Sleep(time.Duration(cfg.ScrapeInterval) * time.Second)
-			continue
-		}
+			cycleLog.Info("Checking for new documents")
 
-		cycleLog.Info("Documents fetched", "Documents", docs)
-
-		if len(docs) == 0 {
-			cycleLog.Info("No documents found for the current Grand Prix")
-			cycleLog.Info("Sleeping before retrying", "seconds", cfg.ScrapeInterval)
-			time.Sleep(time.Duration(cfg.ScrapeInterval) * time.Second)
-			continue
-		}
-
-		// Create a worker pool with limited concurrency
-		var wg sync.WaitGroup
-		semaphore := make(chan struct{}, maxConcurrentProcessing)
-
-		// Create a map to track processed documents and then pass it to log
-		processedDocs := make(map[string]bool)
-
-		for _, doc := range docs {
-			// Check database connection before checking if document is processed
+			// Check database connection before processing
+			// This will wait until connection is established
 			waitForDBConnection(cycleCtx, store)
 
-			// Skip already processed documents (moved this check earlier to handle all docs including recalled ones)
-			if store.IsDocumentProcessed(cycleCtx, doc) {
-				processedDocs[doc.Title] = true
+			docs, err := sc.FetchLatestDocuments(cycleCtx, documentsToFetch)
+			if err != nil {
+				cycleLog.Error("Error fetching documents", "error", err)
+				cycleLog.Info("Sleeping before retrying", "seconds", cfg.ScrapeInterval)
+				time.Sleep(time.Duration(cfg.ScrapeInterval) * time.Second)
 				continue
 			}
 
-			// Check if this is a recalled document by its title
-			if sc.IsRecalledDocument(*doc) {
-				cycleLog.Info("Detected recalled document from title", "document", doc.Title)
+			cycleLog.Info("Documents fetched", "Documents", docs)
 
-				// Process recalled document specially
-				cycleLog.Info("Posting recalled document notice")
-				err := postRecalledDocumentNotice(cycleCtx, pstr, doc)
-				if err != nil {
-					cycleLog.Error("Error posting recalled document notice", "error", err)
-					// Skip marking as processed if posting the notice failed, allow retry next cycle
+			if len(docs) == 0 {
+				cycleLog.Info("No documents found for the current Grand Prix")
+				cycleLog.Info("Sleeping before retrying", "seconds", cfg.ScrapeInterval)
+				time.Sleep(time.Duration(cfg.ScrapeInterval) * time.Second)
+				continue
+			}
+
+			// Create a worker pool with limited concurrency
+			var wg sync.WaitGroup
+			semaphore := make(chan struct{}, maxConcurrentProcessing)
+
+			// Create a map to track processed documents and then pass it to log
+			processedDocs := make(map[string]bool)
+
+			for _, doc := range docs {
+				// Check database connection before checking if document is processed
+				waitForDBConnection(cycleCtx, store)
+
+				// Skip already processed documents (moved this check earlier to handle all docs including recalled ones)
+				if store.IsDocumentProcessed(cycleCtx, doc) {
+					processedDocs[doc.Title] = true
 					continue
 				}
 
-				// Mark as processed only if the notice was successfully posted
-				cycleLog.Info("Marking recalled document as processed")
-				err = store.AddProcessedDocument(cycleCtx, storage.ProcessedDocument{
-					Title:     doc.Title,
-					URL:       doc.URL,
-					Timestamp: doc.Published,
-				})
-				if err != nil {
-					cycleLog.Error("Error updating storage", "error", err)
+				// Check if this is a recalled document by its title
+				if sc.IsRecalledDocument(*doc) {
+					cycleLog.Info("Detected recalled document from title", "document", doc.Title)
+
+					// Process recalled document specially
+					cycleLog.Info("Posting recalled document notice")
+					err := postRecalledDocumentNotice(cycleCtx, pstr, doc)
+					if err != nil {
+						cycleLog.Error("Error posting recalled document notice", "error", err)
+						// Skip marking as processed if posting the notice failed, allow retry next cycle
+						continue
+					}
+
+					// Mark as processed only if the notice was successfully posted
+					cycleLog.Info("Marking recalled document as processed")
+					err = store.AddProcessedDocument(cycleCtx, storage.ProcessedDocument{
+						Title:     doc.Title,
+						URL:       doc.URL,
+						Timestamp: doc.Published,
+					})
+					if err != nil {
+						cycleLog.Error("Error updating storage", "error", err)
+					}
+
+					// Add to the processed docs map to avoid multiple notices
+					processedDocs[doc.Title] = true
+
+					continue
 				}
 
-				// Add to the processed docs map to avoid multiple notices
-				processedDocs[doc.Title] = true
+				// Limit concurrency using semaphore
+				semaphore <- struct{}{}
+				wg.Add(1)
 
-				continue
+				go func(document *scraper.Document) {
+					defer wg.Done()
+					defer func() { <-semaphore }()
+
+					// Create a document processing context derived from the cycle context
+					docCtx := cycleCtx
+					docLog := log.WithRequestContext(docCtx).
+						WithContext("component", "document_processor")
+
+					docLog.Info(fmt.Sprintf("Processing new document: %s", document.Title))
+					processDocument(docCtx, document, sc, summarizer, pstr, store)
+				}(doc)
 			}
 
-			// Limit concurrency using semaphore
-			semaphore <- struct{}{}
-			wg.Add(1)
+			// Log skipped documents after the loop (if any)
+			if len(processedDocs) > 0 {
+				cycleLog.Info("Skipping already processed document(s)", "Documents", processedDocs)
+			}
 
-			go func(document *scraper.Document) {
-				defer wg.Done()
-				defer func() { <-semaphore }()
+			// Wait for all goroutines to finish
+			wg.Wait()
 
-				// Create a document processing context derived from the cycle context
-				docCtx := cycleCtx
-				docLog := log.WithRequestContext(docCtx).
-					WithContext("component", "document_processor")
-
-				docLog.Info(fmt.Sprintf("Processing new document: %s", document.Title))
-				processDocument(docCtx, document, sc, summarizer, pstr, store)
-			}(doc)
+			cycleLog.Info("Sleeping before next check", "seconds", cfg.ScrapeInterval)
+			time.Sleep(time.Duration(cfg.ScrapeInterval) * time.Second)
 		}
+	}()
 
-		// Log skipped documents after the loop (if any)
-		if len(processedDocs) > 0 {
-			cycleLog.Info("Skipping already processed document(s)", "Documents", processedDocs)
-		}
+	// Wait for shutdown signal
+	sig := <-shutdownChan
+	uptime := time.Since(startTime)
 
-		// Wait for all goroutines to finish
-		wg.Wait()
+	appLog.Info("Shutdown signal received",
+		"signal", sig.String(),
+		"uptime_seconds", uptime.Seconds(),
+	)
 
-		cycleLog.Info("Sleeping before next check", "seconds", cfg.ScrapeInterval)
-		time.Sleep(time.Duration(cfg.ScrapeInterval) * time.Second)
+	appLog.Info("Draining connections and cleaning up...")
+
+	// Wait for main loop to finish (with timeout)
+	select {
+	case <-done:
+		appLog.Info("Main processing loop stopped gracefully")
+	case <-time.After(30 * time.Second):
+		appLog.Warn("Shutdown timeout reached, forcing exit")
 	}
+
+	appLog.Info("Application shutdown complete",
+		"uptime", uptime.String(),
+		"final_goroutines", runtime.NumGoroutine(),
+	)
 }
 
 // processDocument handles all steps for a single document
