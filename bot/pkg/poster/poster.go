@@ -55,6 +55,7 @@ func New(accessToken, userID, clientID, clientSecret, redirectURI, picsurAPI, pi
 
 // Post posts the images to Threads
 func (p *Poster) Post(ctx context.Context, images []image.Image, title string, publishTime time.Time, documentURL, aiSummary string) error {
+	start := time.Now()
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "Post")
 
@@ -66,39 +67,68 @@ func (p *Poster) Post(ctx context.Context, images []image.Image, title string, p
 
 	// Upload images to Picsur
 	ctxLog.Debug("Uploading images to Picsur", "count", len(images))
+	uploadStart := time.Now()
 	imageURLs, err := p.uploadImages(ctx, images)
+	uploadDuration := time.Since(uploadStart)
+
 	if err != nil {
-		ctxLog.Error("Failed to upload images", "error", err)
+		ctxLog.ErrorWithType("Failed to upload images", err,
+			"upload_duration_ms", uploadDuration.Milliseconds())
 		return err
 	}
+
+	ctxLog.Info("Images uploaded successfully",
+		"count", len(imageURLs),
+		"upload_duration_ms", uploadDuration.Milliseconds())
 
 	// Format the text for the post
 	ctxLog.Debug("Formatting post text")
 	postText, err := p.formatPostText(ctx, title, publishTime, documentURL, aiSummary)
 	if err != nil {
-		ctxLog.Error("Failed to format post text", "error", err)
+		ctxLog.ErrorWithType("Failed to format post text", err)
 		return err
 	}
 
 	ctxLog.Debug("Post character count", "chars", len(postText))
 
 	// Determine whether to post a single image or a carousel based on the number of images
+	var postErr error
+	postStart := time.Now()
+
 	if len(imageURLs) == 1 {
 		// Single image post
 		ctxLog.Info("Posting single image to Threads")
-		return p.postSingleImage(ctx, imageURLs[0], postText)
+		postErr = p.postSingleImage(ctx, imageURLs[0], postText)
 	} else if len(imageURLs) >= 2 && len(imageURLs) <= 20 {
 		// Carousel post
 		ctxLog.Info("Posting carousel to Threads", "images", len(imageURLs))
-		return p.postCarousel(ctx, imageURLs, postText)
+		postErr = p.postCarousel(ctx, imageURLs, postText)
+	} else {
+		ctxLog.Error("Invalid number of images", "count", len(imageURLs))
+		return fmt.Errorf("invalid number of images: %d. Must be between 1 and 20", len(imageURLs))
 	}
 
-	ctxLog.Error("Invalid number of images", "count", len(imageURLs))
-	return fmt.Errorf("invalid number of images: %d. Must be between 1 and 20", len(imageURLs))
+	postDuration := time.Since(postStart)
+	totalDuration := time.Since(start)
+
+	if postErr != nil {
+		ctxLog.ErrorWithType("Failed to post to Threads", postErr,
+			"post_duration_ms", postDuration.Milliseconds(),
+			"total_duration_ms", totalDuration.Milliseconds())
+		return postErr
+	}
+
+	ctxLog.Info("Post to Threads completed successfully",
+		"post_duration_ms", postDuration.Milliseconds(),
+		"upload_duration_ms", uploadDuration.Milliseconds(),
+		"total_duration_ms", totalDuration.Milliseconds())
+
+	return nil
 }
 
 // PostTextOnly posts a text-only message to Threads without any media
 func (p *Poster) PostTextOnly(ctx context.Context, text string) error {
+	start := time.Now()
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "PostTextOnly")
 
@@ -115,12 +145,16 @@ func (p *Poster) PostTextOnly(ctx context.Context, text string) error {
 		Text:     text,
 		TopicTag: TopicTag,
 	})
+	duration := time.Since(start)
+
 	if err != nil {
-		ctxLog.Error("Failed to create text-only post", "error", err)
+		ctxLog.ErrorWithType("Failed to create text-only post", err,
+			"duration_ms", duration.Milliseconds())
 		return fmt.Errorf("failed to create text-only post: %v", err)
 	}
 
-	ctxLog.Debug("Text-only message posted successfully")
+	ctxLog.Info("Text-only message posted successfully",
+		"duration_ms", duration.Milliseconds())
 	return nil
 }
 

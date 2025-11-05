@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"bot/pkg/logger"
 	"bot/pkg/scraper"
@@ -199,6 +200,7 @@ func (s *PostgresStorage) Close() error {
 
 // AddProcessedDocument adds a document to the processed documents list
 func (s *PostgresStorage) AddProcessedDocument(ctx context.Context, doc ProcessedDocument) error {
+	start := time.Now()
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "AddProcessedDocument").
 		WithContext("url", doc.URL)
@@ -206,46 +208,73 @@ func (s *PostgresStorage) AddProcessedDocument(ctx context.Context, doc Processe
 	// Check if the document already exists
 	var exists bool
 	ctxLog.Debug("Checking if document already exists")
+	checkStart := time.Now()
 	err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM processed_documents WHERE url = $1 AND title = $2)",
 		doc.URL, doc.Title).Scan(&exists)
+	checkDuration := time.Since(checkStart)
+
 	if err != nil {
-		ctxLog.Error("Error checking if document exists", "error", err)
+		ctxLog.ErrorWithType("Error checking if document exists", err,
+			"query_duration_ms", checkDuration.Milliseconds())
 		return fmt.Errorf("error checking if document exists: %v", err)
 	}
 
+	ctxLog.Debug("Document existence check completed",
+		"exists", exists,
+		"query_duration_ms", checkDuration.Milliseconds())
+
 	if exists {
-		ctxLog.Info("Document already processed, skipping")
+		ctxLog.Info("Document already processed, skipping",
+			"total_duration_ms", time.Since(start).Milliseconds())
 		return nil // Already processed
 	}
 
 	// Insert the document
 	ctxLog.Info(fmt.Sprintf("Adding document to processed list: %s", doc.Title))
+	insertStart := time.Now()
 	_, err = s.db.Exec(
 		"INSERT INTO processed_documents (title, url, timestamp) VALUES ($1, $2, $3)",
 		doc.Title, doc.URL, doc.Timestamp,
 	)
+	insertDuration := time.Since(insertStart)
+	totalDuration := time.Since(start)
+
 	if err != nil {
-		ctxLog.Error("Error inserting document", "error", err)
+		ctxLog.ErrorWithType("Error inserting document", err,
+			"insert_duration_ms", insertDuration.Milliseconds(),
+			"total_duration_ms", totalDuration.Milliseconds())
 		return fmt.Errorf("error inserting document: %v", err)
 	}
+
+	ctxLog.Info("Document added to processed list successfully",
+		"insert_duration_ms", insertDuration.Milliseconds(),
+		"total_duration_ms", totalDuration.Milliseconds())
 
 	return nil
 }
 
 // IsDocumentProcessed checks if a document has been processed
 func (s *PostgresStorage) IsDocumentProcessed(ctx context.Context, doc *scraper.Document) bool {
+	start := time.Now()
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "IsDocumentProcessed")
 
 	var exists bool
 	err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM processed_documents WHERE url = $1 AND title = $2)",
 		doc.URL, doc.Title).Scan(&exists)
+	duration := time.Since(start)
+
 	if err != nil {
 		// If there's a database error, we'll assume it's not processed
 		// The main loop will handle reconnection
-		ctxLog.Error("Error checking if document exists", "error", err)
+		ctxLog.ErrorWithType("Error checking if document exists", err,
+			"query_duration_ms", duration.Milliseconds())
 		return false
 	}
+
+	ctxLog.Debug("Document processed check completed",
+		"exists", exists,
+		"query_duration_ms", duration.Milliseconds())
 
 	if exists {
 		ctxLog.Debug("Document is already processed")

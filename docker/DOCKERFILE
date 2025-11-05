@@ -31,4 +31,7 @@ RUN apt-get update && apt-get install -y \
 
 COPY --from=builder /app .
 
+# Expose pprof port for profiling
+EXPOSE 6060
+
 CMD [ "./app" ]
