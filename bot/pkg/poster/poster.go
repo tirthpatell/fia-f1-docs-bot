@@ -2,11 +2,8 @@ package poster
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"image"
-	"io"
-	"net/http"
 	"strings"
 	"time"
 
@@ -23,17 +20,6 @@ const (
 	maxCharacterLimit = 500
 	ellipsis          = "..."
 	TopicTag          = "F1Threads"
-
-	// Container status constants
-	containerStatusFinished   = "FINISHED"
-	containerStatusInProgress = "IN_PROGRESS"
-	containerStatusPublished  = "PUBLISHED"
-	containerStatusExpired    = "EXPIRED"
-	containerStatusError      = "ERROR"
-
-	// Polling configuration
-	containerStatusPollInterval = 500 * time.Millisecond // Check every 500ms
-	containerStatusMaxTimeout   = 2 * time.Minute        // Max wait time of 2 minutes
 )
 
 // Poster is a struct that holds the configuration for the poster
@@ -247,13 +233,8 @@ func (p *Poster) postCarousel(ctx context.Context, imageURLs []string, postText 
 		containerIDStr := string(containerID)
 		containerIDs = append(containerIDs, containerIDStr)
 
-		// Check container status to ensure it's ready before proceeding
-		ctxLog.Debug("Checking container status", "index", i+1, "containerID", containerIDStr)
-		if err := p.checkContainerStatus(ctx, containerIDStr); err != nil {
-			ctxLog.Error("Container status check failed", "index", i+1, "containerID", containerIDStr, "error", err)
-			return fmt.Errorf("container status check failed for container %s: %w", containerIDStr, err)
-		}
-		ctxLog.Debug("Container ready", "index", i+1, "containerID", containerIDStr)
+		// Sleep for container processing
+		time.Sleep(2 * time.Second)
 	}
 
 	// Create carousel post
@@ -330,117 +311,4 @@ func truncateText(text string, limit int) string {
 	}
 
 	return text[:lastSpace] + ellipsis
-}
-
-// containerStatusResponse represents the response from the container status endpoint
-type containerStatusResponse struct {
-	Status string `json:"status"`
-	ID     string `json:"id"`
-}
-
-// checkContainerStatus polls the Threads API to check if a media container is ready
-// This replaces the need for time.Sleep() by actively checking the container status
-func (p *Poster) checkContainerStatus(ctx context.Context, containerID string) error {
-	ctxLog := log.WithRequestContext(ctx).
-		WithContext("method", "checkContainerStatus").
-		WithContext("containerID", containerID)
-
-	ctxLog.Debug("Starting container status check")
-
-	// Create a timeout context
-	timeoutCtx, cancel := context.WithTimeout(ctx, containerStatusMaxTimeout)
-	defer cancel()
-
-	ticker := time.NewTicker(containerStatusPollInterval)
-	defer ticker.Stop()
-
-	startTime := time.Now()
-
-	for {
-		select {
-		case <-timeoutCtx.Done():
-			elapsed := time.Since(startTime)
-			ctxLog.Error("Container status check timed out",
-				"elapsed_ms", elapsed.Milliseconds(),
-				"timeout_ms", containerStatusMaxTimeout.Milliseconds())
-			return fmt.Errorf("container status check timed out after %v", elapsed)
-
-		case <-ticker.C:
-			// Make API request to check container status
-			url := fmt.Sprintf("https://graph.threads.net/v1.0/%s?fields=status&access_token=%s",
-				containerID, p.AccessToken)
-
-			req, err := http.NewRequestWithContext(timeoutCtx, "GET", url, nil)
-			if err != nil {
-				ctxLog.Error("Failed to create status check request", "error", err)
-				return fmt.Errorf("failed to create status check request: %w", err)
-			}
-
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				ctxLog.Error("Failed to execute status check request", "error", err)
-				return fmt.Errorf("failed to execute status check request: %w", err)
-			}
-
-			body, err := io.ReadAll(resp.Body)
-			resp.Body.Close()
-
-			if err != nil {
-				ctxLog.Error("Failed to read status check response", "error", err)
-				return fmt.Errorf("failed to read status check response: %w", err)
-			}
-
-			if resp.StatusCode != http.StatusOK {
-				ctxLog.Error("Status check request failed",
-					"status_code", resp.StatusCode,
-					"response", string(body))
-				return fmt.Errorf("status check request failed with code %d: %s", resp.StatusCode, string(body))
-			}
-
-			var statusResp containerStatusResponse
-			if err := json.Unmarshal(body, &statusResp); err != nil {
-				ctxLog.Error("Failed to parse status check response", "error", err, "body", string(body))
-				return fmt.Errorf("failed to parse status check response: %w", err)
-			}
-
-			ctxLog.Debug("Container status received",
-				"status", statusResp.Status,
-				"elapsed_ms", time.Since(startTime).Milliseconds())
-
-			switch statusResp.Status {
-			case containerStatusFinished:
-				elapsed := time.Since(startTime)
-				ctxLog.Info("Container is ready",
-					"elapsed_ms", elapsed.Milliseconds())
-				return nil
-
-			case containerStatusInProgress:
-				// Continue polling
-				ctxLog.Debug("Container still in progress, continuing to poll")
-				continue
-
-			case containerStatusError:
-				elapsed := time.Since(startTime)
-				ctxLog.Error("Container processing failed",
-					"elapsed_ms", elapsed.Milliseconds())
-				return fmt.Errorf("container processing failed with ERROR status")
-
-			case containerStatusExpired:
-				elapsed := time.Since(startTime)
-				ctxLog.Error("Container has expired",
-					"elapsed_ms", elapsed.Milliseconds())
-				return fmt.Errorf("container has expired")
-
-			case containerStatusPublished:
-				elapsed := time.Since(startTime)
-				ctxLog.Warn("Container already published",
-					"elapsed_ms", elapsed.Milliseconds())
-				return nil
-
-			default:
-				ctxLog.Warn("Unknown container status", "status", statusResp.Status)
-				continue
-			}
-		}
-	}
 }

@@ -481,8 +481,6 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 	if err != nil {
 		docLog.Error("Error generating summary", "error", err)
 		// Continue with posting even if summary generation fails
-	} else {
-		docLog.Info("AI Summary generated successfully", "length", len(aiSummary))
 	}
 
 	// Convert the PDF to images
