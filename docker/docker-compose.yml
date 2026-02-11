@@ -9,7 +9,7 @@ services:
     volumes:
       - ../bot:/app
     ports:
-      - "6060:6060"  # pprof port mapping
+      - "6060:6060"  # Health check
     networks:
       - app-network
 

@@ -35,6 +35,11 @@ func NewPostgres(host, port, user, password, dbname, sslmode string) (StorageInt
 		return nil, fmt.Errorf("error connecting to database: %v", err)
 	}
 
+	// Configure connection pool for concurrent workers
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
+
 	// Test the connection
 	if err := db.Ping(); err != nil {
 		ctxLog.Error("Error pinging database", "error", err)
@@ -91,9 +96,8 @@ func NewPostgres(host, port, user, password, dbname, sslmode string) (StorageInt
 			`)
 
 			if err != nil {
-				err := tx.Rollback()
-				if err != nil {
-					return nil, fmt.Errorf("error rolling back transaction: %v", err)
+				if rbErr := tx.Rollback(); rbErr != nil {
+					return nil, fmt.Errorf("error dropping constraint: %v (rollback failed: %v)", err, rbErr)
 				}
 				ctxLog.Error("Error dropping constraint", "error", err)
 				return nil, fmt.Errorf("error dropping constraint: %v", err)
@@ -105,9 +109,8 @@ func NewPostgres(host, port, user, password, dbname, sslmode string) (StorageInt
 			`)
 
 			if err != nil {
-				err := tx.Rollback()
-				if err != nil {
-					return nil, fmt.Errorf("error rolling back transaction: %v", err)
+				if rbErr := tx.Rollback(); rbErr != nil {
+					return nil, fmt.Errorf("error adding new constraint: %v (rollback failed: %v)", err, rbErr)
 				}
 				ctxLog.Error("Error adding new constraint", "error", err)
 				return nil, fmt.Errorf("error adding new constraint: %v", err)
@@ -164,6 +167,11 @@ func (s *PostgresStorage) Reconnect() error {
 		ctxLog.Error("Error reconnecting to database", "error", err)
 		return fmt.Errorf("error reconnecting to database: %v", err)
 	}
+
+	// Re-apply connection pool settings
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
 
 	// Test the connection
 	if err := db.Ping(); err != nil {

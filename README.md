@@ -84,9 +84,6 @@ This bot uses the [Threads Go client library](https://pkg.go.dev/github.com/tirt
    DB_NAME=fiadocs
    DB_SSL_MODE=disable
    
-   # Performance Profiling (optional)
-   PPROF_ENABLED=false
-   PPROF_PORT=6060
    ```
 
 3. Run the container:
@@ -97,15 +94,6 @@ This bot uses the [Threads Go client library](https://pkg.go.dev/github.com/tirt
      ptirth/fia-f1-docs-bot:latest
    ```
    
-   Or with pprof enabled for profiling:
-   ```sh
-   docker run -d \
-     --name fia-f1-docs-bot \
-     --env-file .env \
-     -p 6060:6060 \
-     ptirth/fia-f1-docs-bot:latest
-   ```
-
    Or using Docker Compose:
    ```yaml
    services:
@@ -115,7 +103,7 @@ This bot uses the [Threads Go client library](https://pkg.go.dev/github.com/tirt
          - .env
        restart: unless-stopped
        ports:
-         - "6060:6060"  # Only needed if PPROF_ENABLED=true
+         - "6060:6060"  # Health check endpoint
    ```
 
 ### Persistent Storage
@@ -132,46 +120,25 @@ To configure PostgreSQL:
 
 ## Building and Publishing Docker Images
 
-### Manual Build to Multiple Registries
+### GitHub Actions (CI/CD)
 
-To build and publish Docker images to both Docker Hub and GitHub Container Registry:
-
-1. **Set up authentication:**
-   
-   For Docker Hub:
-   ```sh
-   docker login
-   ```
-   
-   For GitHub Container Registry:
-   ```sh
-   # Create a Personal Access Token with 'write:packages' scope
-   docker login ghcr.io -u YOUR_GITHUB_USERNAME
-   ```
-
-2. **Run the multi-registry build script:**
-   ```sh
-   ./build-and-publish-multi-registry.sh
-   ```
-   
-   The script will prompt you to select which registries to push to.
-
-### Automated Builds with GitHub Actions
-
-This repository includes a GitHub Actions workflow that automatically builds and publishes Docker images to both Docker Hub and GitHub Container Registry when:
-- Tags are pushed (e.g., `v1.0.0`)
-- Commits are pushed to the `main` branch
-- Pull requests are opened (build only, no push)
+Docker images are automatically built and published to both Docker Hub and GitHub Container Registry on:
+- Pushes to `main`
+- Tag pushes (e.g., `v1.0.0`)
 
 **Required GitHub Secrets:**
 - `DOCKER_USERNAME`: Your Docker Hub username
 - `DOCKER_TOKEN`: Your Docker Hub access token
+- `GITHUB_TOKEN`: Automatically provided for GHCR authentication
 
-**Automatic Authentication:**
-- `GITHUB_TOKEN`: Automatically provided by GitHub Actions for GHCR authentication
-- No manual configuration needed for GitHub Container Registry
+### Manual Build
 
-The workflow uses `${{ secrets.GITHUB_TOKEN }}` which is automatically available in every GitHub Actions workflow with the necessary permissions to push to your repository's container registry.
+For manual builds outside of CI, use the script in `scripts/`:
+```sh
+./scripts/build-and-publish.sh
+```
+
+This requires a `scripts/.env` file with `DOCKER_USER` and `DOCKER_REPO` set (see `scripts/.env.example`).
 
 ## Local Development Setup
 
@@ -212,70 +179,6 @@ Required environment variables for the URL shortener:
 - `SHORTENER_URL`: Base URL of the shortener service (e.g., https://shortener.example.com)
 
 The shortened URLs will be included in the post text, allowing users to easily access the original documents.
-
-### Performance Profiling with pprof
-
-The bot includes built-in support for Go's pprof profiling tool to help debug memory leaks and performance issues.
-
-To enable pprof:
-1. Add these environment variables to your `.env` file:
-   ```
-   PPROF_ENABLED=true
-   PPROF_PORT=6060  # Optional, defaults to 6060
-   ```
-
-2. When the bot is running with pprof enabled, you can access the following endpoints:
-   - `http://localhost:6060/debug/pprof/` - Profiling index page
-   - `http://localhost:6060/debug/pprof/heap` - Heap memory profile
-   - `http://localhost:6060/debug/pprof/goroutine` - Goroutine stack traces
-   - `http://localhost:6060/debug/pprof/threadcreate` - Thread creation profile
-   - `http://localhost:6060/debug/pprof/block` - Block contention profile
-   - `http://localhost:6060/debug/pprof/mutex` - Mutex contention profile
-
-3. Common pprof commands for memory leak detection:
-   ```sh
-   # Capture heap profile
-   go tool pprof http://localhost:6060/debug/pprof/heap
-   
-   # Compare heap profiles to find memory leaks
-   go tool pprof -base=heap1.prof heap2.prof
-   
-   # View live heap profile in browser
-   go tool pprof -http=:8080 http://localhost:6060/debug/pprof/heap
-   
-   # Get top memory allocations
-   curl http://localhost:6060/debug/pprof/heap > heap.prof
-   go tool pprof -top heap.prof
-   ```
-
-**Note:** Only enable pprof in development/testing environments as it exposes sensitive runtime information.
-
-#### Using pprof with Docker
-
-When running the bot in Docker with pprof enabled:
-
-1. Ensure you map the pprof port when starting the container:
-   ```sh
-   docker run -d \
-     --name fia-f1-docs-bot \
-     --env-file .env \
-     -p 6060:6060 \
-     ptirth/fia-f1-docs-bot:latest
-   ```
-
-2. Access pprof from your host machine:
-   ```sh
-   # View heap profile in browser
-   go tool pprof -http=:8080 http://localhost:6060/debug/pprof/heap
-   
-   # Save heap snapshot from Docker container
-   curl http://localhost:6060/debug/pprof/heap > docker-heap.prof
-   
-   # Analyze goroutines
-   go tool pprof http://localhost:6060/debug/pprof/goroutine
-   ```
-
-3. For docker-compose deployments, the port mapping is already configured in the compose file.
 
 ## Contributing
 

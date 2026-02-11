@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 // ShortenerClient is a client for the URL shortener service
@@ -71,7 +72,7 @@ func (c *ShortenerClient) ShortenURL(ctx context.Context, longURL string) (strin
 
 	// Send request
 	ctxLog.Debug("Sending URL shortening request")
-	client := &http.Client{}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		ctxLog.Error("Failed to send request", "error", err)

@@ -3,3 +3,4 @@
 ./bot/.env
 .idea
 CLAUDE.md
+bot/main

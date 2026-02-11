@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strings"
+	"time"
 
 	"bot/pkg/logger"
 
@@ -100,9 +101,10 @@ func (c *Client) UploadImage(ctx context.Context, img image.Image) (string, erro
 	req.Header.Set("Authorization", "Api-Key "+c.ApiKey)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	// Send request
+	// Send request with timeout
 	ctxLog.Debug("Uploading image to Picsur")
-	resp, err := http.DefaultClient.Do(req)
+	httpClient := &http.Client{Timeout: 60 * time.Second}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		ctxLog.Error("Failed to send request", "error", err)
 		return "", fmt.Errorf("failed to send request: %v", err)
