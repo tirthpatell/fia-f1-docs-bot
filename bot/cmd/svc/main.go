@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -35,8 +34,9 @@ const (
 // Global logger
 var log *logger.Logger
 
-// waitForDBConnection attempts to establish a database connection with retries
-func waitForDBConnection(ctx context.Context, store storage.StorageInterface) {
+// waitForDBConnection attempts to establish a database connection with retries.
+// Returns false if the context was cancelled (shutdown requested).
+func waitForDBConnection(ctx context.Context, store storage.StorageInterface) bool {
 	// Get context-aware logger
 	dbLog := log.WithRequestContext(ctx).WithContext("component", "database")
 
@@ -44,16 +44,26 @@ func waitForDBConnection(ctx context.Context, store storage.StorageInterface) {
 	if err := store.CheckConnection(); err != nil {
 		dbLog.Error("Database connection lost", "error", err)
 		dbLog.Info("Waiting before retrying", "interval", shortRetryInterval)
-		time.Sleep(shortRetryInterval)
+
+		select {
+		case <-time.After(shortRetryInterval):
+		case <-ctx.Done():
+			return false
+		}
 
 		// Try to reconnect
 		if err := store.Reconnect(); err != nil {
 			dbLog.Error("Failed to reconnect to database", "error", err)
 
-			// Keep trying with long interval until successful
+			// Keep trying with long interval until successful or context cancelled
 			for {
 				dbLog.Info("Waiting before retrying", "interval", longRetryInterval)
-				time.Sleep(longRetryInterval)
+
+				select {
+				case <-time.After(longRetryInterval):
+				case <-ctx.Done():
+					return false
+				}
 
 				if err := store.Reconnect(); err != nil {
 					dbLog.Error("Failed to reconnect to database", "error", err)
@@ -66,6 +76,7 @@ func waitForDBConnection(ctx context.Context, store storage.StorageInterface) {
 			dbLog.Info("Successfully reconnected to database")
 		}
 	}
+	return true
 }
 
 func main() {
@@ -170,13 +181,18 @@ func main() {
 	shutdownChan := make(chan os.Signal, 1)
 	signal.Notify(shutdownChan, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
 
+	// Context for background goroutines, cancelled on shutdown
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	defer bgCancel()
+
 	// Channel to coordinate shutdown
 	done := make(chan bool, 1)
 
 	appLog.Info("Service initialization complete, entering main loop")
 
 	// Setup health check endpoint
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		healthLog := log.WithContext("component", "health_check")
 
 		// Check database connection
@@ -201,41 +217,18 @@ func main() {
 		}
 	})
 
-	// Start pprof server for profiling if enabled
-	if cfg.PprofEnabled {
-		go func() {
-			pprofLog := log.WithContext("component", "pprof")
-			pprofPort := cfg.PprofPort
-			if pprofPort == "" {
-				pprofPort = "6060" // Default pprof port
-			}
-
-			pprofLog.Info("Starting pprof and health check server", "port", pprofPort)
-			pprofLog.Info("Available endpoints:", "endpoints", []string{
-				"http://localhost:" + pprofPort + "/health",
-				"http://localhost:" + pprofPort + "/debug/pprof/",
-				"http://localhost:" + pprofPort + "/debug/pprof/heap",
-				"http://localhost:" + pprofPort + "/debug/pprof/goroutine",
-				"http://localhost:" + pprofPort + "/debug/pprof/threadcreate",
-				"http://localhost:" + pprofPort + "/debug/pprof/block",
-				"http://localhost:" + pprofPort + "/debug/pprof/mutex",
-			})
-			if err := http.ListenAndServe(":"+pprofPort, nil); err != nil {
-				pprofLog.Error("Failed to start pprof server", "error", err)
-			}
-		}()
-	} else {
-		// Even if pprof is disabled, start a minimal health check server
-		go func() {
-			healthLog := log.WithContext("component", "health_server")
-			healthPort := "6060" // Use same port as pprof
-
-			healthLog.Info("Starting health check server", "port", healthPort)
-			if err := http.ListenAndServe(":"+healthPort, nil); err != nil {
-				healthLog.Error("Failed to start health check server", "error", err)
-			}
-		}()
+	// Start health check server with graceful shutdown support
+	healthServer := &http.Server{
+		Addr:    ":6060",
+		Handler: mux,
 	}
+	go func() {
+		healthLog := log.WithContext("component", "health_server")
+		healthLog.Info("Starting health check server", "port", "6060")
+		if err := healthServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			healthLog.Error("Failed to start health check server", "error", err)
+		}
+	}()
 
 	// Start a goroutine to periodically check and refresh token
 	go func() {
@@ -243,7 +236,14 @@ func main() {
 		tokenLog := log.WithRequestContext(tokenCtx).WithContext("component", "token_refresher")
 
 		// Initial delay to let the service start
-		time.Sleep(5 * time.Second)
+		select {
+		case <-time.After(5 * time.Second):
+		case <-bgCtx.Done():
+			return
+		}
+
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
 
 		for {
 			tokenLog.Debug("Checking token status")
@@ -267,8 +267,12 @@ func main() {
 				tokenLog.Debug("Token is still valid")
 			}
 
-			// Check every 24 hours
-			time.Sleep(24 * time.Hour)
+			select {
+			case <-ticker.C:
+			case <-bgCtx.Done():
+				tokenLog.Info("Token refresher shutting down")
+				return
+			}
 		}
 	}()
 
@@ -294,8 +298,10 @@ func main() {
 			cycleLog.Info("Checking for new documents")
 
 			// Check database connection before processing
-			// This will wait until connection is established
-			waitForDBConnection(cycleCtx, store)
+			// This will wait until connection is established or shutdown
+			if !waitForDBConnection(bgCtx, store) {
+				return
+			}
 
 			docs, err := sc.FetchLatestDocuments(cycleCtx, documentsToFetch)
 			if err != nil {
@@ -323,7 +329,9 @@ func main() {
 
 			for _, doc := range docs {
 				// Check database connection before checking if document is processed
-				waitForDBConnection(cycleCtx, store)
+				if !waitForDBConnection(bgCtx, store) {
+					return
+				}
 
 				// Skip already processed documents (moved this check earlier to handle all docs including recalled ones)
 				if store.IsDocumentProcessed(cycleCtx, doc) {
@@ -401,6 +409,16 @@ func main() {
 		"uptime_seconds", uptime.Seconds(),
 	)
 
+	// Cancel background goroutines (token refresher, etc.)
+	bgCancel()
+
+	// Shutdown health check server
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := healthServer.Shutdown(shutdownCtx); err != nil {
+		appLog.Error("Error shutting down health server", "error", err)
+	}
+
 	appLog.Info("Draining connections and cleaning up...")
 
 	// Wait for main loop to finish (with timeout)
@@ -454,7 +472,7 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 			}
 
 			// Check database connection before updating
-			waitForDBConnection(ctx, store)
+			_ = waitForDBConnection(ctx, store)
 
 			// Mark as processed to avoid repeated attempts
 			docLog.Info("Marking recalled document as processed")
@@ -506,14 +524,14 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 
 	docLog.Info("Successfully posted to Threads")
 
-	// Add explicit cleanup after using images
+	// Help GC reclaim image memory
 	for i := range images {
-		images[i] = nil // Help GC by explicitly nulling references
+		images[i] = nil
 	}
 	images = nil
 
 	// Check database connection before updating
-	waitForDBConnection(ctx, store)
+	_ = waitForDBConnection(ctx, store)
 
 	// Update storage after successful posting
 	docLog.Debug("Marking document as processed")

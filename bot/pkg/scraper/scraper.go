@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,7 +31,6 @@ type Scraper struct {
 }
 
 func New(baseURL string) *Scraper {
-	// No need to seed the random number generator in Go 1.20+
 	return &Scraper{
 		baseURL: baseURL,
 	}
@@ -148,7 +148,6 @@ func (s *Scraper) FetchLatestDocuments(ctx context.Context, limit int) ([]*Docum
 	}
 
 	// Sort documents by publish date (most recent first)
-	// Since most recent should be first, we sort in reverse chronological order
 	sortDocumentsByDate(documents)
 
 	// Limit the number of documents if needed
@@ -160,32 +159,11 @@ func (s *Scraper) FetchLatestDocuments(ctx context.Context, limit int) ([]*Docum
 	return documents, nil
 }
 
-// Helper function to sort documents by date (most recent first)
+// sortDocumentsByDate sorts documents by date (most recent first)
 func sortDocumentsByDate(docs []*Document) {
-	// Use bubble sort for simplicity
-	n := len(docs)
-	for i := 0; i < n-1; i++ {
-		for j := 0; j < n-i-1; j++ {
-			// If the current document is older than the next one, swap them
-			if docs[j].Published.Before(docs[j+1].Published) {
-				docs[j], docs[j+1] = docs[j+1], docs[j]
-			}
-		}
-	}
-}
-
-// FetchLatestDocument returns only the most recent document
-func (s *Scraper) FetchLatestDocument(ctx context.Context) (*Document, error) {
-	ctxLog := log.WithRequestContext(ctx).WithContext("method", "FetchLatestDocument")
-
-	docs, err := s.FetchLatestDocuments(ctx, 1)
-	if err != nil {
-		ctxLog.Error("Error fetching latest document", "error", err)
-		return nil, err
-	}
-
-	ctxLog.Info("Latest document fetched", "title", docs[0].Title)
-	return docs[0], nil
+	sort.Slice(docs, func(i, j int) bool {
+		return docs[i].Published.After(docs[j].Published)
+	})
 }
 
 // DownloadDocument downloads a document to the specified directory and returns the file path
@@ -199,7 +177,7 @@ func (s *Scraper) DownloadDocument(ctx context.Context, doc Document, directory 
 		return "", fmt.Errorf("document has been recalled: %s", doc.Title)
 	}
 
-	// Create a custom HTTP client with cache-busting headers
+	// Create a fresh HTTP client per download to avoid cached responses via keep-alive
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
@@ -269,14 +247,13 @@ func (s *Scraper) DownloadDocument(ctx context.Context, doc Document, directory 
 	}
 
 	// Verify the downloaded file is a valid PDF
-	if err := s.verifyPDF(filePath); err != nil {
+	if verifyErr := s.verifyPDF(filePath); verifyErr != nil {
 		// If verification fails, it might be a recalled document that wasn't properly marked
-		err := os.Remove(filePath)
-		if err != nil {
-			return "", fmt.Errorf("error removing file: %v", err)
-		} // Clean up the invalid file
-		ctxLog.Warn("Invalid PDF file detected, possibly recalled", "error", err)
-		return "", fmt.Errorf("invalid PDF file (possibly recalled): %v", err)
+		if rmErr := os.Remove(filePath); rmErr != nil {
+			ctxLog.Warn("Failed to clean up invalid file", "error", rmErr)
+		}
+		ctxLog.Warn("Invalid PDF file detected, possibly recalled", "error", verifyErr)
+		return "", fmt.Errorf("invalid PDF file (possibly recalled): %v", verifyErr)
 	}
 
 	ctxLog.Debug("Document downloaded successfully", "path", filePath)
@@ -298,9 +275,8 @@ func (s *Scraper) verifyPDF(filePath string) error {
 		return err
 	}
 	defer func(file *os.File) {
-		err := file.Close()
-		if err != nil {
-			fmt.Printf("Error closing file: %v", err)
+		if err := file.Close(); err != nil {
+			log.Warn("Error closing file", "error", err)
 		}
 	}(file)
 

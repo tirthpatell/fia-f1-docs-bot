@@ -30,10 +30,6 @@ type Config struct {
 	ShortenerAPIKey     string `mapstructure:"SHORTENER_API_KEY"`
 	ShortenerURL        string `mapstructure:"SHORTENER_URL"`
 
-	// Profiling configuration
-	PprofEnabled bool   `mapstructure:"PPROF_ENABLED"`
-	PprofPort    string `mapstructure:"PPROF_PORT"`
-
 	// Logging configuration
 	LogLevel     string `mapstructure:"LOG_LEVEL"`
 	LogAddSource bool   `mapstructure:"LOG_ADD_SOURCE"`
@@ -51,21 +47,19 @@ func Load() (*Config, error) {
 		fmt.Printf("Error reading config file: %s\n", err)
 	}
 
-	var cfg Config
-	if err := viper.Unmarshal(&cfg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
-	}
-
-	// Set default values
+	// Set default values before unmarshalling so they take effect
 	viper.SetDefault("SCRAPE_INTERVAL", 30)
 	viper.SetDefault("DB_PORT", "5432")
 	viper.SetDefault("DB_SSL_MODE", "disable")
-	viper.SetDefault("PPROF_ENABLED", false)
-	viper.SetDefault("PPROF_PORT", "6060")
 	viper.SetDefault("LOG_LEVEL", "info")
 	viper.SetDefault("LOG_ADD_SOURCE", false)
 	viper.SetDefault("ENVIRONMENT", "production")
 	viper.SetDefault("VERSION", "unknown")
+
+	var cfg Config
+	if err := viper.Unmarshal(&cfg); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
 
 	// Validate required fields
 	if cfg.ThreadsAccessToken == "" {
