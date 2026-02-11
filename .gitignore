@@ -1,6 +1,8 @@
 .env
+.env.*
+**/.env
+**/.env.*
 .DS_Store
-./bot/.env
 .idea
 CLAUDE.md
 bot/main
