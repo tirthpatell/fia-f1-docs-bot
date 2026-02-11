@@ -1,49 +1,42 @@
 #!/bin/bash
 
-# Exit the script if any command fails
+# Manually build and push a Docker image to Docker Hub.
+# Requires a scripts/.env file with DOCKER_USER and DOCKER_REPO set.
+
 set -e
 
-# Load environment variables from the .env file located in the scripts folder
-SCRIPT_DIR="$(dirname "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Load environment variables
 if [ -f "$SCRIPT_DIR/.env" ]; then
   export $(grep -v '^#' "$SCRIPT_DIR/.env" | xargs)
 else
-  echo "Error: .env file not found in $SCRIPT_DIR."
+  echo "Error: .env file not found in $SCRIPT_DIR (see .env.example)."
   exit 1
 fi
 
-# Check if DOCKER_USER and DOCKER_REPO are set
 if [ -z "$DOCKER_USER" ] || [ -z "$DOCKER_REPO" ]; then
   echo "Error: DOCKER_USER or DOCKER_REPO not set in .env file."
   exit 1
 fi
 
-# Define the full image name
 IMAGE_NAME="$DOCKER_USER/$DOCKER_REPO"
 
-# Get the current Git tag (or fallback to "latest" if no tag is found)
-VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "latest")
+echo "Building Docker image: $IMAGE_NAME:latest (linux/amd64)"
 
-# Define the full image tag
-IMAGE_TAG="$IMAGE_NAME:$VERSION"
-
-# Navigate to the directory where the docker-compose.yml file is located
-cd "$SCRIPT_DIR/../docker"
-
-echo "Setting up Docker Buildx for multi-platform builds..."
-# Create and use a new buildx builder if it doesn't exist
+# Setup buildx builder
 docker buildx create --name multiplatform --use 2>/dev/null || docker buildx use multiplatform
 
-echo "Building Docker image with tag: $IMAGE_TAG for linux/amd64 platform"
-# Build the image locally first
+# Build from project root so paths are straightforward
 docker buildx build \
   --platform linux/amd64 \
-  --file ../docker/DOCKERFILE \
-  --tag $IMAGE_TAG \
+  --file "$PROJECT_ROOT/docker/DOCKERFILE" \
+  --tag "$IMAGE_NAME:latest" \
   --load \
-  ../bot
+  "$PROJECT_ROOT/bot"
 
-echo "Pushing the image to Docker Hub: $IMAGE_TAG"
-docker push $IMAGE_TAG
+echo "Pushing: $IMAGE_NAME:latest"
+docker push "$IMAGE_NAME:latest"
 
-echo "Docker image $IMAGE_TAG has been successfully published!"
+echo "Done."
