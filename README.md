@@ -120,46 +120,25 @@ To configure PostgreSQL:
 
 ## Building and Publishing Docker Images
 
-### Manual Build to Multiple Registries
+### GitHub Actions (CI/CD)
 
-To build and publish Docker images to both Docker Hub and GitHub Container Registry:
-
-1. **Set up authentication:**
-   
-   For Docker Hub:
-   ```sh
-   docker login
-   ```
-   
-   For GitHub Container Registry:
-   ```sh
-   # Create a Personal Access Token with 'write:packages' scope
-   docker login ghcr.io -u YOUR_GITHUB_USERNAME
-   ```
-
-2. **Run the multi-registry build script:**
-   ```sh
-   ./build-and-publish-multi-registry.sh
-   ```
-   
-   The script will prompt you to select which registries to push to.
-
-### Automated Builds with GitHub Actions
-
-This repository includes a GitHub Actions workflow that automatically builds and publishes Docker images to both Docker Hub and GitHub Container Registry when:
-- Tags are pushed (e.g., `v1.0.0`)
-- Commits are pushed to the `main` branch
-- Pull requests are opened (build only, no push)
+Docker images are automatically built and published to both Docker Hub and GitHub Container Registry on:
+- Pushes to `main`
+- Tag pushes (e.g., `v1.0.0`)
 
 **Required GitHub Secrets:**
 - `DOCKER_USERNAME`: Your Docker Hub username
 - `DOCKER_TOKEN`: Your Docker Hub access token
+- `GITHUB_TOKEN`: Automatically provided for GHCR authentication
 
-**Automatic Authentication:**
-- `GITHUB_TOKEN`: Automatically provided by GitHub Actions for GHCR authentication
-- No manual configuration needed for GitHub Container Registry
+### Manual Build
 
-The workflow uses `${{ secrets.GITHUB_TOKEN }}` which is automatically available in every GitHub Actions workflow with the necessary permissions to push to your repository's container registry.
+For manual builds outside of CI, use the script in `scripts/`:
+```sh
+./scripts/build-and-publish.sh
+```
+
+This requires a `scripts/.env` file with `DOCKER_USER` and `DOCKER_REPO` set (see `scripts/.env.example`).
 
 ## Local Development Setup
 
