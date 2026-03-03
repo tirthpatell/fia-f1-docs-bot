@@ -3,6 +3,7 @@ package summary
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"bot/pkg/logger"
@@ -23,6 +24,8 @@ type Config struct {
 
 // Models in order of preference
 var modelPriority = []string{
+	"gemini-3.1-flash-lite-preview",
+	"gemini-3.1-flash-lite",
 	"gemini-2.5-flash-lite",
 	"gemini-2.0-flash-lite",
 	"gemini-2.0-flash",
@@ -100,7 +103,7 @@ func (s *Summarizer) tryGenerateSummaryWithModel(ctx context.Context, modelName 
 		WithContext("model", modelName)
 
 	ctxLog.Debug("Creating model config")
-	config := createModelConfig()
+	config := createModelConfig(modelName)
 
 	ctxLog.Debug("Creating chat session with file")
 	// Create history with the uploaded file
@@ -156,19 +159,31 @@ func (s *Summarizer) uploadFile(ctx context.Context, path, mimeType string) (str
 }
 
 // createModelConfig creates the Gemini model configuration with optimal settings
-func createModelConfig() *genai.GenerateContentConfig {
+func createModelConfig(modelName string) *genai.GenerateContentConfig {
 	temperature := float32(0.7)
-	topK := float32(64)
-	topP := float32(0.95)
 	maxTokens := int32(8192)
 
-	systemInstruction := "You are a concise and focused assistant. Based on the attached document, generate a 40-50 word summary emphasizing specific actions or decisions, such as penalties issued, rule changes, or instances where no action was taken, but only when there was some incident and it specifically mentions no penalty given. Prioritize clarity and relevance to highlight key outcomes. Provide only the summary without any additional explanation or commentary."
+	systemInstruction := `You are a concise Formula 1 news bot posting to Threads. Based on the attached FIA document, generate a 40–60 word summary.
 
-	return &genai.GenerateContentConfig{
+First, identify the document type:
+- **Stewards Decision**: Summarize the specific penalty, reprimand, or finding. Include the driver/team involved, the infringement, and the outcome. If the stewards investigated but took no further action, state that clearly.
+- **Classification / Timing Sheet**: Summarize who topped the session, their time, notable gaps, and total laps completed by the field.
+- **Technical Directive / Regulation Update**: Summarize the rule change or clarification and which teams or components it affects.
+- **Other**: Summarize the key factual content.
+
+Keep the tone neutral and factual. Do not add commentary, speculation, or explanation beyond the summary. Do not use hashtags or emojis.`
+
+	config := &genai.GenerateContentConfig{
 		SystemInstruction: genai.NewContentFromText(systemInstruction, genai.RoleUser),
 		Temperature:       &temperature,
-		TopK:              &topK,
-		TopP:              &topP,
 		MaxOutputTokens:   maxTokens,
 	}
+
+	if strings.HasPrefix(modelName, "gemini-3.1") {
+		config.ThinkingConfig = &genai.ThinkingConfig{
+			ThinkingLevel: genai.ThinkingLevelMedium,
+		}
+	}
+
+	return config
 }
