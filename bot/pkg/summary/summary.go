@@ -3,6 +3,7 @@ package summary
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"bot/pkg/logger"
@@ -41,14 +42,14 @@ func New(cfg Config) (*Summarizer, error) {
 	ctxLog := log.WithContext("method", "New")
 
 	ctx := context.Background()
-	ctxLog.Info("Creating Gemini client")
+	ctxLog.Info("Creating Vertex AI client")
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:  cfg.APIKey,
-		Backend: genai.BackendGeminiAPI,
+		Backend: genai.BackendVertexAI,
 	})
 	if err != nil {
-		ctxLog.Error("Error creating Gemini client", "error", err)
-		return nil, fmt.Errorf("error creating Gemini client: %w", err)
+		ctxLog.Error("Error creating Vertex AI client", "error", err)
+		return nil, fmt.Errorf("error creating Vertex AI client: %w", err)
 	}
 
 	ctxLog.Info("Summarizer initialized successfully")
@@ -57,10 +58,10 @@ func New(cfg Config) (*Summarizer, error) {
 	}, nil
 }
 
-// Close closes the Gemini client
+// Close closes the client
 func (s *Summarizer) Close() {
 	ctxLog := log.WithContext("method", "Close")
-	ctxLog.Info("Gemini client cleanup (no action needed)")
+	ctxLog.Info("Client cleanup (no action needed)")
 }
 
 // GenerateSummary generates a summary for the given PDF file
@@ -70,19 +71,19 @@ func (s *Summarizer) GenerateSummary(ctx context.Context, pdfPath string) (strin
 		WithContext("method", "GenerateSummary").
 		WithContext("pdfPath", pdfPath)
 
-	ctxLog.Debug("Uploading file to Gemini")
-	fileURI, err := s.uploadFile(ctx, pdfPath, "application/pdf")
+	ctxLog.Debug("Reading PDF file")
+	pdfData, err := os.ReadFile(pdfPath)
 	if err != nil {
-		ctxLog.Error("Error uploading file", "error", err)
-		return "", fmt.Errorf("error uploading file: %w", err)
+		ctxLog.Error("Error reading PDF file", "error", err)
+		return "", fmt.Errorf("error reading PDF file: %w", err)
 	}
-	ctxLog.Debug("File uploaded successfully", "fileURI", fileURI)
+	ctxLog.Debug("PDF file read successfully", "bytes", len(pdfData))
 
 	// Try each model in order of priority
 	var lastError error
 	for _, model := range modelPriority {
 		ctxLog.Debug("Attempting to generate summary", "model", model.name)
-		summary, err := s.tryGenerateSummaryWithModel(ctx, model, fileURI)
+		summary, err := s.tryGenerateSummaryWithModel(ctx, model, pdfData)
 		if err == nil {
 			// Success with this model
 			ctxLog.Info("AI summary generated successfully", "model", model.name, "length", len(summary))
@@ -101,7 +102,7 @@ func (s *Summarizer) GenerateSummary(ctx context.Context, pdfPath string) (strin
 }
 
 // tryGenerateSummaryWithModel attempts to generate a summary with the specified model
-func (s *Summarizer) tryGenerateSummaryWithModel(ctx context.Context, model modelEntry, fileURI string) (string, error) {
+func (s *Summarizer) tryGenerateSummaryWithModel(ctx context.Context, model modelEntry, pdfData []byte) (string, error) {
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "tryGenerateSummaryWithModel").
 		WithContext("model", model.name)
@@ -109,10 +110,20 @@ func (s *Summarizer) tryGenerateSummaryWithModel(ctx context.Context, model mode
 	ctxLog.Debug("Creating model config")
 	config := createModelConfig(model)
 
-	ctxLog.Debug("Creating chat session with file")
-	// Create history with the uploaded file
+	ctxLog.Debug("Creating chat session with inline PDF")
+	// Send PDF as inline data (Vertex AI does not support the Files API)
 	history := []*genai.Content{
-		genai.NewContentFromURI(fileURI, "application/pdf", genai.RoleUser),
+		{
+			Role: genai.RoleUser,
+			Parts: []*genai.Part{
+				{
+					InlineData: &genai.Blob{
+						Data:     pdfData,
+						MIMEType: "application/pdf",
+					},
+				},
+			},
+		},
 	}
 
 	chat, err := s.client.Chats.Create(ctx, model.name, config, history)
@@ -142,27 +153,7 @@ func (s *Summarizer) tryGenerateSummaryWithModel(ctx context.Context, model mode
 	return fmt.Sprintf("%v", part), nil
 }
 
-// uploadFile uploads a file to Gemini and returns its URI
-func (s *Summarizer) uploadFile(ctx context.Context, path, mimeType string) (string, error) {
-	ctxLog := log.WithRequestContext(ctx).
-		WithContext("method", "uploadFile").
-		WithContext("path", path).
-		WithContext("mimeType", mimeType)
-
-	ctxLog.Debug("Uploading file to Gemini")
-	fileData, err := s.client.Files.UploadFromPath(ctx, path, &genai.UploadFileConfig{
-		DisplayName: path,
-		MIMEType:    mimeType,
-	})
-	if err != nil {
-		ctxLog.Error("Error uploading file", "error", err)
-		return "", fmt.Errorf("error uploading file: %w", err)
-	}
-
-	return fileData.URI, nil
-}
-
-// createModelConfig creates the Gemini model configuration with optimal settings
+// createModelConfig creates the model configuration with optimal settings
 func createModelConfig(model modelEntry) *genai.GenerateContentConfig {
 	temperature := float32(0.7)
 	maxTokens := int32(8192)
