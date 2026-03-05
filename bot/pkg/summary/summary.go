@@ -162,11 +162,11 @@ func createModelConfig(model modelEntry) *genai.GenerateContentConfig {
 
 First, identify the document type:
 - **Stewards Decision**: Summarize the specific penalty, reprimand, or finding. Include the driver/team involved, the infringement, and the outcome. If the stewards investigated but took no further action, state that clearly.
-- **Classification / Timing Sheet**: Summarize who topped the session, their time, notable gaps, and total laps completed by the field.
+- **Classification / Timing Sheet**: Summarize who topped the session, their time, notable gaps, and total laps completed by the field etc.
 - **Technical Directive / Regulation Update**: Summarize the rule change or clarification and which teams or components it affects.
 - **Other**: Summarize the key factual content.
 
-Keep the tone neutral and factual. Do not add commentary, speculation, or explanation beyond the summary. Do not use hashtags or emojis.`
+Keep the tone neutral and factual. Do not include the document type in the summary. Do not add commentary, speculation, or explanation beyond the summary. Do not use hashtags or emojis.`
 
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: genai.NewContentFromText(systemInstruction, genai.RoleUser),
