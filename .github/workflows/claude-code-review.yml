@@ -15,15 +15,28 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Run Claude Code Review
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
-            Review this pull request for code quality, correctness, and security.
-            Analyze the diff and post your findings as review comments.
-            Focus on logic errors, bugs, security vulnerabilities, and regressions.
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request with a focus on:
+            - Code quality and best practices
+            - Potential bugs or logic errors
+            - Security vulnerabilities
+            - Performance considerations
+
+            Note: The PR branch is already checked out in the current working directory.
             Consider the project context from CLAUDE.md.
-          claude_args: "--max-turns 5"
+
+            Use `gh pr comment` for top-level feedback.
+            Use `mcp__github_inline_comment__create_inline_comment` to highlight specific code issues.
+            Only post GitHub comments - don't submit review text as messages.
+          claude_args: |
+            --max-turns 5
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
