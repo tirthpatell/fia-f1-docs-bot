@@ -163,6 +163,7 @@ func main() {
 	})
 	if err != nil {
 		appLog.Error("Failed to initialize summarizer", "error", err)
+		os.Exit(1)
 	}
 	defer summarizer.Close()
 
@@ -305,9 +306,12 @@ func main() {
 
 			docs, err := sc.FetchLatestDocuments(cycleCtx, documentsToFetch)
 			if err != nil {
-				cycleLog.Error("Error fetching documents", "error", err)
-				cycleLog.Info("Sleeping before retrying", "seconds", cfg.ScrapeInterval)
-				time.Sleep(time.Duration(cfg.ScrapeInterval) * time.Second)
+				cycleLog.Info("No documents available", "reason", err)
+				select {
+				case <-time.After(time.Duration(cfg.ScrapeInterval) * time.Second):
+				case <-bgCtx.Done():
+					return
+				}
 				continue
 			}
 
@@ -315,8 +319,11 @@ func main() {
 
 			if len(docs) == 0 {
 				cycleLog.Info("No documents found for the current Grand Prix")
-				cycleLog.Info("Sleeping before retrying", "seconds", cfg.ScrapeInterval)
-				time.Sleep(time.Duration(cfg.ScrapeInterval) * time.Second)
+				select {
+				case <-time.After(time.Duration(cfg.ScrapeInterval) * time.Second):
+				case <-bgCtx.Done():
+					return
+				}
 				continue
 			}
 
@@ -396,7 +403,11 @@ func main() {
 			wg.Wait()
 
 			cycleLog.Info("Sleeping before next check", "seconds", cfg.ScrapeInterval)
-			time.Sleep(time.Duration(cfg.ScrapeInterval) * time.Second)
+			select {
+			case <-time.After(time.Duration(cfg.ScrapeInterval) * time.Second):
+			case <-bgCtx.Done():
+				return
+			}
 		}
 	}()
 

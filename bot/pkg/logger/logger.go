@@ -101,8 +101,9 @@ func newLogSampler() *logSampler {
 	}
 }
 
-// shouldLog determines if a log message should be emitted based on sampling
-func (s *logSampler) shouldLog(key string) bool {
+// shouldLog determines if a log message should be emitted based on sampling.
+// Returns whether to log and the current count for the key.
+func (s *logSampler) shouldLog(key string) (bool, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -121,11 +122,11 @@ func (s *logSampler) shouldLog(key string) bool {
 
 	// Always log the first N occurrences
 	if count < s.sampleAfter {
-		return true
+		return true, count
 	}
 
 	// After that, sample at the specified rate
-	return count%s.sampleRate == 0
+	return count%s.sampleRate == 0, count
 }
 
 // sanitizingHandler wraps a handler to sanitize sensitive data
@@ -376,8 +377,7 @@ func (l *Logger) ErrorWithType(msg string, err error, args ...interface{}) {
 
 // SampledError logs an error with sampling to avoid flooding logs with repeated errors
 func (l *Logger) SampledError(key string, msg string, args ...interface{}) {
-	if l.sampler.shouldLog(key) {
-		count := l.sampler.counts[key]
+	if shouldLog, count := l.sampler.shouldLog(key); shouldLog {
 		if count > l.sampler.sampleAfter {
 			// Add sampling metadata
 			allArgs := make([]interface{}, 0, len(args)+2)

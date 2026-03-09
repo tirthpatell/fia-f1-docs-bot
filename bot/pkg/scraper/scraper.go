@@ -144,7 +144,7 @@ func (s *Scraper) FetchLatestDocuments(ctx context.Context, limit int) ([]*Docum
 
 	if len(documents) == 0 {
 		ctxLog.Info("No documents found for current Grand Prix")
-		return nil, fmt.Errorf("no documents found for the current Grand Prix")
+		return nil, nil
 	}
 
 	// Sort documents by publish date (most recent first)
@@ -186,7 +186,7 @@ func (s *Scraper) DownloadDocument(ctx context.Context, doc Document, directory 
 	}
 
 	// Create a new request with cache-busting headers
-	req, err := http.NewRequest("GET", doc.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", doc.URL, nil)
 	if err != nil {
 		ctxLog.Error("Error creating request", "error", err)
 		return "", fmt.Errorf("error creating request: %v", err)

@@ -60,7 +60,7 @@ func (c *ShortenerClient) ShortenURL(ctx context.Context, longURL string) (strin
 	// Create request
 	endpoint := c.BaseURL + "/api/shorten"
 	ctxLog.Debug("Creating request", "endpoint", endpoint)
-	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
 		ctxLog.Error("Failed to create request", "error", err)
 		return "", fmt.Errorf("failed to create request: %v", err)

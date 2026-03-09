@@ -284,6 +284,11 @@ func (p *Poster) formatPostText(ctx context.Context, title string, publishTime t
 
 	remainingChars := maxCharacterLimit - len(baseText)
 
+	// If base text already exceeds limit, truncate it and omit summary
+	if remainingChars < 0 {
+		return truncateText(baseText, maxCharacterLimit), nil
+	}
+
 	// Truncate AI summary if needed
 	truncatedSummary := truncateText(aiSummary, remainingChars)
 

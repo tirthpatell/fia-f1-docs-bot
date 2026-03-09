@@ -10,7 +10,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"strings"
+	"net/url"
 	"time"
 
 	"bot/pkg/logger"
@@ -92,7 +92,7 @@ func (c *Client) UploadImage(ctx context.Context, img image.Image) (string, erro
 	// Create request
 	uploadURL := fmt.Sprintf("%s/api/image/upload", c.BaseURL)
 	ctxLog.Debug("Creating upload request", "url", uploadURL)
-	req, err := http.NewRequest("POST", uploadURL, body)
+	req, err := http.NewRequestWithContext(ctx, "POST", uploadURL, body)
 	if err != nil {
 		ctxLog.Error("Failed to create request", "error", err)
 		return "", fmt.Errorf("failed to create request: %v", err)
@@ -134,9 +134,13 @@ func (c *Client) UploadImage(ctx context.Context, img image.Image) (string, erro
 	return imageURL, nil
 }
 
-// EncodeURL encodes spaces in URL
+// EncodeURL properly encodes a URL, handling special characters in the path
 func EncodeURL(input string) string {
-	return strings.ReplaceAll(input, " ", "%20")
+	u, err := url.Parse(input)
+	if err != nil {
+		return input
+	}
+	return u.String()
 }
 
 // ConvertToImages converts a PDF document to a slice of images
