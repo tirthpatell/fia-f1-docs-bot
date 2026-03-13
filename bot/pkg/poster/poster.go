@@ -184,9 +184,6 @@ func (p *Poster) uploadImages(ctx context.Context, images []image.Image) ([]stri
 		ctxLog.Debug("Uploaded image", "index", i+1, "total", len(images))
 	}
 
-	// Small delay after all uploads to ensure they're processed
-	time.Sleep(2 * time.Second)
-
 	ctxLog.Info("All images uploaded successfully", "count", len(imageURLs))
 	return imageURLs, nil
 }
@@ -232,9 +229,6 @@ func (p *Poster) postCarousel(ctx context.Context, imageURLs []string, postText 
 
 		containerIDStr := string(containerID)
 		containerIDs = append(containerIDs, containerIDStr)
-
-		// Sleep for container processing
-		time.Sleep(2 * time.Second)
 	}
 
 	// Create carousel post
