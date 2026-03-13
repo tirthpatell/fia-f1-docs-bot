@@ -6,7 +6,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.11.2
 	github.com/spf13/viper v1.21.0
-	github.com/tirthpatell/threads-go v1.7.0
+	github.com/tirthpatell/threads-go v1.7.1
 )
 
 require (
