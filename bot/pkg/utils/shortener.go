@@ -99,7 +99,6 @@ func (c *ShortenerClient) ShortenURL(ctx context.Context, longURL string) (strin
 	}
 
 	ctxLog.Info("URL shortened successfully",
-		"originalURL", longURL,
 		"shortURL", shortenResp.ShortURL)
 	return shortenResp.ShortURL, nil
 }

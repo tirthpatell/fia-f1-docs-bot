@@ -382,7 +382,7 @@ func main() {
 					docLog := log.WithRequestContext(docCtx).
 						WithContext("component", "document_processor")
 
-					docLog.Info(fmt.Sprintf("Processing new document: %s", document.Title))
+					docLog.Info("Processing new document", "title", document.Title)
 					processDocument(docCtx, document, sc, summarizer, pstr, store)
 				}(doc)
 			}
@@ -394,6 +394,11 @@ func main() {
 
 			// Wait for all goroutines to finish
 			wg.Wait()
+
+			// GC once per cycle after all workers complete. Running it here
+			// (rather than in each worker) avoids N back-to-back STW pauses
+			// when multiple workers finish concurrently.
+			runtime.GC()
 
 			cycleLog.Info("Sleeping before next check", "seconds", cfg.ScrapeInterval)
 			time.Sleep(time.Duration(cfg.ScrapeInterval) * time.Second)
@@ -472,7 +477,9 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 			}
 
 			// Check database connection before updating
-			_ = waitForDBConnection(ctx, store)
+			if !waitForDBConnection(ctx, store) {
+				return
+			}
 
 			// Mark as processed to avoid repeated attempts
 			docLog.Info("Marking recalled document as processed")
@@ -524,14 +531,20 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 
 	docLog.Info("Successfully posted to Threads")
 
-	// Help GC reclaim image memory
+	// Drop image references before potentially blocking on DB reconnect.
+	// Each page is a Go-managed []byte (go-fitz copies pixel data out of C
+	// memory inside Image() and frees the C pixmap before returning), so
+	// nil-ing here lets the GC reclaim the large buffers while this goroutine
+	// may be blocked waiting for a DB reconnect.
 	for i := range images {
 		images[i] = nil
 	}
 	images = nil
 
 	// Check database connection before updating
-	_ = waitForDBConnection(ctx, store)
+	if !waitForDBConnection(ctx, store) {
+		return
+	}
 
 	// Update storage after successful posting
 	docLog.Debug("Marking document as processed")
@@ -544,8 +557,6 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 		docLog.Error("Error updating storage", "error", err)
 	}
 
-	// Force garbage collection after processing large documents
-	runtime.GC()
 	docLog.Info("Document processing complete")
 }
 
