@@ -394,7 +394,7 @@ func (l *Logger) SampledError(key string, msg string, args ...any) {
 		if count >= l.sampler.sampleAfter {
 			// Add sampling metadata
 			allArgs := make([]any, 0, len(args)+4)
-			allArgs = append(allArgs, "sampled", true, "occurrence_count", count)
+			allArgs = append(allArgs, "sampled", true, "occurrence_count", count+1)
 			allArgs = append(allArgs, args...)
 			l.logWithCaller(slog.LevelError, msg, allArgs...)
 		} else {
