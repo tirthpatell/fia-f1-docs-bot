@@ -65,11 +65,6 @@ func (s *Scraper) FetchLatestDocuments(ctx context.Context, limit int) ([]*Docum
 	// Set AllowURLRevisit to true
 	c.AllowURLRevisit = true
 
-	// Configure transport to disable caching
-	c.WithTransport(&http.Transport{
-		DisableKeepAlives: true,
-	})
-
 	// Add cache-busting query parameter
 	cacheBuster := fmt.Sprintf("?_cb=%d", time.Now().UnixNano())
 	targetURL := s.baseURL + cacheBuster
@@ -86,7 +81,7 @@ func (s *Scraper) FetchLatestDocuments(ctx context.Context, limit int) ([]*Docum
 		e.ForEach("li", func(_ int, el *colly.HTMLElement) {
 			if el.ChildText(".event-title.active") != "" {
 				activeGP := el.ChildText(".event-title.active")
-				ctxLog.Info(fmt.Sprintf("Found active Grand Prix: %s", activeGP))
+				ctxLog.Info("Found active Grand Prix", "gp", activeGP)
 
 				// Process only the documents under the active Grand Prix
 				el.ForEach("li.document-row", func(_ int, docEl *colly.HTMLElement) {
@@ -134,7 +129,7 @@ func (s *Scraper) FetchLatestDocuments(ctx context.Context, limit int) ([]*Docum
 	})
 
 	// Log the URL being visited
-	ctxLog.Info(fmt.Sprintf("Visiting URL: %s", targetURL))
+	ctxLog.Info("Visiting URL", "url", targetURL)
 
 	err := c.Visit(targetURL)
 	if err != nil {
@@ -144,7 +139,7 @@ func (s *Scraper) FetchLatestDocuments(ctx context.Context, limit int) ([]*Docum
 
 	if len(documents) == 0 {
 		ctxLog.Info("No documents found for current Grand Prix")
-		return nil, fmt.Errorf("no documents found for the current Grand Prix")
+		return nil, nil
 	}
 
 	// Sort documents by publish date (most recent first)

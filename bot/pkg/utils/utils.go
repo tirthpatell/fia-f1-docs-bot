@@ -129,7 +129,7 @@ func (c *Client) UploadImage(ctx context.Context, img image.Image) (string, erro
 	}
 
 	// Construct the image URL from the response ID
-	imageURL := fmt.Sprintf("%s/i/%s.jpg", c.BaseURL, picsurResp.Data.ID)
+	imageURL := fmt.Sprintf("%s/i/%s.png", c.BaseURL, picsurResp.Data.ID)
 	ctxLog.Debug("Image uploaded successfully", "url", imageURL)
 	return imageURL, nil
 }
@@ -163,7 +163,7 @@ func ConvertToImages(ctx context.Context, pdfPath string) ([]image.Image, error)
 
 	var images []image.Image
 
-	for i := 0; i < numPages; i++ {
+	for i := range numPages {
 		ctxLog.Debug("Converting page to image", "page", i+1)
 		img, err := doc.Image(i)
 		if err != nil {

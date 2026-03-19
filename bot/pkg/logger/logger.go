@@ -22,9 +22,15 @@ const (
 	LevelInfo  Level = "info"
 	LevelWarn  Level = "warn"
 	LevelError Level = "error"
+)
 
-	// Context key for request ID
-	ctxKeyRequestID = "requestID"
+// ctxKey is a private type for context keys in this package, preventing
+// collisions with keys from other packages that happen to use the same string.
+type ctxKey string
+
+const (
+	ctxKeyRequestID ctxKey = "requestID" // per-goroutine / per-document
+	ctxKeySessionID ctxKey = "sessionID" // per-scrape-cycle
 )
 
 // ParseLevel converts a string to a Level
@@ -101,8 +107,9 @@ func newLogSampler() *logSampler {
 	}
 }
 
-// shouldLog determines if a log message should be emitted based on sampling
-func (s *logSampler) shouldLog(key string) bool {
+// shouldLog determines if a log message should be emitted based on sampling.
+// Returns (emit, count) where count is the occurrence count before this call.
+func (s *logSampler) shouldLog(key string) (bool, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -121,11 +128,11 @@ func (s *logSampler) shouldLog(key string) bool {
 
 	// Always log the first N occurrences
 	if count < s.sampleAfter {
-		return true
+		return true, count
 	}
 
 	// After that, sample at the specified rate
-	return count%s.sampleRate == 0
+	return count%s.sampleRate == 0, count
 }
 
 // sanitizingHandler wraps a handler to sanitize sensitive data
@@ -199,7 +206,6 @@ func (h *customHandler) Handle(ctx context.Context, r slog.Record) error {
 	// Add standard fields to each log
 	attrs := []slog.Attr{
 		slog.String("service", h.serviceName),
-		slog.String("message", r.Message),
 	}
 
 	if h.environment != "" {
@@ -269,10 +275,18 @@ func New(cfg Config) *Logger {
 		version = "unknown"
 	}
 
-	// Create handler with JSON format for structured logging
+	// Create handler with JSON format for structured logging.
+	// ReplaceAttr renames the default "msg" key to "message" so the log
+	// message appears as a queryable structured field in log aggregators.
 	baseHandler := slog.NewJSONHandler(output, &slog.HandlerOptions{
 		Level:     level,
 		AddSource: cfg.AddSource,
+		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.MessageKey {
+				a.Key = "message"
+			}
+			return a
+		},
 	})
 
 	// Wrap with sanitizing handler if enabled
@@ -344,28 +358,28 @@ func Package(pkg string) *Logger {
 }
 
 // Debug logs at debug level
-func (l *Logger) Debug(msg string, args ...interface{}) {
+func (l *Logger) Debug(msg string, args ...any) {
 	l.logWithCaller(slog.LevelDebug, msg, args...)
 }
 
 // Info logs at info level
-func (l *Logger) Info(msg string, args ...interface{}) {
+func (l *Logger) Info(msg string, args ...any) {
 	l.logWithCaller(slog.LevelInfo, msg, args...)
 }
 
 // Warn logs at warn level
-func (l *Logger) Warn(msg string, args ...interface{}) {
+func (l *Logger) Warn(msg string, args ...any) {
 	l.logWithCaller(slog.LevelWarn, msg, args...)
 }
 
 // Error logs at error level
-func (l *Logger) Error(msg string, args ...interface{}) {
+func (l *Logger) Error(msg string, args ...any) {
 	l.logWithCaller(slog.LevelError, msg, args...)
 }
 
 // ErrorWithType logs an error with its type information for better debugging
-func (l *Logger) ErrorWithType(msg string, err error, args ...interface{}) {
-	allArgs := make([]interface{}, 0, len(args)+4)
+func (l *Logger) ErrorWithType(msg string, err error, args ...any) {
+	allArgs := make([]any, 0, len(args)+4)
 	allArgs = append(allArgs, "error", err)
 	if err != nil {
 		allArgs = append(allArgs, "error_type", fmt.Sprintf("%T", err))
@@ -375,13 +389,12 @@ func (l *Logger) ErrorWithType(msg string, err error, args ...interface{}) {
 }
 
 // SampledError logs an error with sampling to avoid flooding logs with repeated errors
-func (l *Logger) SampledError(key string, msg string, args ...interface{}) {
-	if l.sampler.shouldLog(key) {
-		count := l.sampler.counts[key]
-		if count > l.sampler.sampleAfter {
+func (l *Logger) SampledError(key string, msg string, args ...any) {
+	if emit, count := l.sampler.shouldLog(key); emit {
+		if count >= l.sampler.sampleAfter {
 			// Add sampling metadata
-			allArgs := make([]interface{}, 0, len(args)+2)
-			allArgs = append(allArgs, "sampled", true, "occurrence_count", count)
+			allArgs := make([]any, 0, len(args)+4)
+			allArgs = append(allArgs, "sampled", true, "occurrence_count", count+1)
 			allArgs = append(allArgs, args...)
 			l.logWithCaller(slog.LevelError, msg, allArgs...)
 		} else {
@@ -391,9 +404,9 @@ func (l *Logger) SampledError(key string, msg string, args ...interface{}) {
 }
 
 // logWithCaller logs with proper caller information, skipping the wrapper frame
-func (l *Logger) logWithCaller(level slog.Level, msg string, args ...interface{}) {
+func (l *Logger) logWithCaller(level slog.Level, msg string, args ...any) {
 	ctx := context.Background()
-	if !l.Logger.Enabled(ctx, level) {
+	if !l.Enabled(ctx, level) {
 		return
 	}
 
@@ -419,15 +432,25 @@ func (l *Logger) logWithCaller(level slog.Level, msg string, args ...interface{}
 	_ = l.Logger.Handler().Handle(ctx, r)
 }
 
-// WithRequestContext creates a logger with request context information
+// WithRequestContext creates a logger enriched with tracing IDs from ctx.
+// It attaches sessionID (cycle-level) and/or requestID (goroutine-level)
+// whenever they are present, so logs can be filtered by either.
 func (l *Logger) WithRequestContext(ctx context.Context) *Logger {
-	// Extract request ID from context if available
-	reqID, ok := ctx.Value(ctxKeyRequestID).(string)
-	if !ok || reqID == "" {
-		reqID = "unknown"
+	sessionID, _ := ctx.Value(ctxKeySessionID).(string)
+	reqID, _ := ctx.Value(ctxKeyRequestID).(string)
+
+	attrs := make([]any, 0, 4)
+	if sessionID != "" {
+		attrs = append(attrs, "sessionID", sessionID)
+	}
+	if reqID != "" {
+		attrs = append(attrs, "requestID", reqID)
+	}
+	if len(attrs) == 0 {
+		attrs = append(attrs, "requestID", "unknown")
 	}
 
-	logger := l.Logger.With("requestID", reqID)
+	logger := l.With(attrs...)
 	return &Logger{
 		Logger:      logger,
 		serviceName: l.serviceName,
@@ -436,8 +459,8 @@ func (l *Logger) WithRequestContext(ctx context.Context) *Logger {
 }
 
 // WithContext adds arbitrary context values to the logger
-func (l *Logger) WithContext(key string, value interface{}) *Logger {
-	logger := l.Logger.With(key, value)
+func (l *Logger) WithContext(key string, value any) *Logger {
+	logger := l.With(key, value)
 	return &Logger{
 		Logger:      logger,
 		serviceName: l.serviceName,
@@ -450,6 +473,26 @@ func NewRequestContext() (context.Context, string) {
 	// Generate a unique ID for this request/operation
 	reqID := generateRequestID()
 	ctx := context.WithValue(context.Background(), ctxKeyRequestID, reqID)
+	return ctx, reqID
+}
+
+// NewSessionContextFrom creates a child of parent with a sessionID for
+// tracking a full scrape cycle. All goroutines spawned within the cycle
+// inherit this ID, enabling cycle-wide log filtering.
+// Cancellation of parent propagates to the returned context.
+func NewSessionContextFrom(parent context.Context) (context.Context, string) {
+	sessionID := generateRequestID()
+	ctx := context.WithValue(parent, ctxKeySessionID, sessionID)
+	return ctx, sessionID
+}
+
+// NewRequestContextFrom creates a child of parent with a requestID for
+// tracking an individual goroutine or operation within a cycle.
+// Any sessionID on parent is preserved and inherited.
+// Cancellation of parent propagates to the returned context.
+func NewRequestContextFrom(parent context.Context) (context.Context, string) {
+	reqID := generateRequestID()
+	ctx := context.WithValue(parent, ctxKeyRequestID, reqID)
 	return ctx, reqID
 }
 

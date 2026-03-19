@@ -110,7 +110,7 @@ func main() {
 	// Set as the default logger for the entire application
 	logger.SetDefaultLogger(log)
 
-	// Create application context
+	// Create application context (startup logging only, not cancellable)
 	appCtx, _ := logger.NewRequestContext()
 	appLog := log.WithRequestContext(appCtx).WithContext("component", "main")
 
@@ -209,10 +209,10 @@ func main() {
 
 		if dbHealthy {
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprintf(w, "OK\nUptime: %s\nGoroutines: %d\n", uptime, goroutines)
+			_, _ = fmt.Fprintf(w, "OK\nUptime: %s\nGoroutines: %d\n", uptime, goroutines)
 		} else {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprintf(w, "Database connection lost\nUptime: %s\nGoroutines: %d\n", uptime, goroutines)
+			_, _ = fmt.Fprintf(w, "Database connection lost\nUptime: %s\nGoroutines: %d\n", uptime, goroutines)
 			healthLog.Warn("Health check failed - database connection lost")
 		}
 	})
@@ -232,7 +232,7 @@ func main() {
 
 	// Start a goroutine to periodically check and refresh token
 	go func() {
-		tokenCtx, _ := logger.NewRequestContext()
+		tokenCtx, _ := logger.NewRequestContextFrom(bgCtx)
 		tokenLog := log.WithRequestContext(tokenCtx).WithContext("component", "token_refresher")
 
 		// Initial delay to let the service start
@@ -291,8 +291,9 @@ func main() {
 				// Continue with normal processing
 			}
 
-			// Create a new context for each check cycle
-			cycleCtx, _ := logger.NewRequestContext()
+			// Create a session context for this cycle. sessionID ties together all
+			// logs for one scrape cycle (cycle-level ops + all worker goroutines).
+			cycleCtx, _ := logger.NewSessionContextFrom(bgCtx)
 			cycleLog := log.WithRequestContext(cycleCtx).WithContext("component", "main_cycle")
 
 			cycleLog.Info("Checking for new documents")
@@ -311,8 +312,6 @@ func main() {
 				continue
 			}
 
-			cycleLog.Info("Documents fetched", "Documents", docs)
-
 			if len(docs) == 0 {
 				cycleLog.Info("No documents found for the current Grand Prix")
 				cycleLog.Info("Sleeping before retrying", "seconds", cfg.ScrapeInterval)
@@ -320,8 +319,11 @@ func main() {
 				continue
 			}
 
+			cycleLog.Info("Documents fetched", "count", len(docs))
+
 			// Create a worker pool with limited concurrency
 			var wg sync.WaitGroup
+			var workerCount int
 			semaphore := make(chan struct{}, maxConcurrentProcessing)
 
 			// Create a map to track processed documents and then pass it to log
@@ -330,6 +332,7 @@ func main() {
 			for _, doc := range docs {
 				// Check database connection before checking if document is processed
 				if !waitForDBConnection(bgCtx, store) {
+					wg.Wait()
 					return
 				}
 
@@ -372,17 +375,20 @@ func main() {
 				// Limit concurrency using semaphore
 				semaphore <- struct{}{}
 				wg.Add(1)
+				workerCount++
 
 				go func(document *scraper.Document) {
 					defer wg.Done()
 					defer func() { <-semaphore }()
 
-					// Create a document processing context derived from the cycle context
-					docCtx := cycleCtx
+					// Each goroutine gets its own requestID so its logs can be
+					// isolated from other concurrent workers. sessionID from
+					// cycleCtx is inherited, linking this back to the cycle.
+					docCtx, _ := logger.NewRequestContextFrom(cycleCtx)
 					docLog := log.WithRequestContext(docCtx).
 						WithContext("component", "document_processor")
 
-					docLog.Info(fmt.Sprintf("Processing new document: %s", document.Title))
+					docLog.Info("Processing new document", "title", document.Title)
 					processDocument(docCtx, document, sc, summarizer, pstr, store)
 				}(doc)
 			}
@@ -394,6 +400,14 @@ func main() {
 
 			// Wait for all goroutines to finish
 			wg.Wait()
+
+			// GC once per cycle after all workers complete. Running it here
+			// (rather than in each worker) avoids N back-to-back STW pauses
+			// when multiple workers finish concurrently. Skip when no workers
+			// were spawned (all docs already processed).
+			if workerCount > 0 {
+				runtime.GC()
+			}
 
 			cycleLog.Info("Sleeping before next check", "seconds", cfg.ScrapeInterval)
 			time.Sleep(time.Duration(cfg.ScrapeInterval) * time.Second)
@@ -472,7 +486,9 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 			}
 
 			// Check database connection before updating
-			_ = waitForDBConnection(ctx, store)
+			if !waitForDBConnection(ctx, store) {
+				return
+			}
 
 			// Mark as processed to avoid repeated attempts
 			docLog.Info("Marking recalled document as processed")
@@ -524,14 +540,22 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 
 	docLog.Info("Successfully posted to Threads")
 
-	// Help GC reclaim image memory
+	// Drop image references before potentially blocking on DB reconnect.
+	// Each page is a Go-managed []byte (go-fitz copies pixel data out of C
+	// memory inside Image() and frees the C pixmap before returning), so
+	// nil-ing here lets the GC reclaim the large buffers while this goroutine
+	// may be blocked waiting for a DB reconnect.
 	for i := range images {
 		images[i] = nil
 	}
 	images = nil
 
 	// Check database connection before updating
-	_ = waitForDBConnection(ctx, store)
+	if !waitForDBConnection(ctx, store) {
+		docLog.Warn("Shutdown during DB write — document was posted but not recorded; may be re-posted on next start",
+			"title", doc.Title, "url", doc.URL)
+		return
+	}
 
 	// Update storage after successful posting
 	docLog.Debug("Marking document as processed")
@@ -544,8 +568,6 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 		docLog.Error("Error updating storage", "error", err)
 	}
 
-	// Force garbage collection after processing large documents
-	runtime.GC()
 	docLog.Info("Document processing complete")
 }
 
