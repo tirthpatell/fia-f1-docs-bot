@@ -332,6 +332,7 @@ func main() {
 			for _, doc := range docs {
 				// Check database connection before checking if document is processed
 				if !waitForDBConnection(bgCtx, store) {
+					wg.Wait()
 					return
 				}
 
@@ -547,6 +548,7 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 	for i := range images {
 		images[i] = nil
 	}
+	images = nil
 
 	// Check database connection before updating
 	if !waitForDBConnection(ctx, store) {
