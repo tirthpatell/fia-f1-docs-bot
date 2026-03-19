@@ -552,6 +552,8 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 
 	// Check database connection before updating
 	if !waitForDBConnection(ctx, store) {
+		docLog.Warn("Shutdown during DB write — document was posted but not recorded; may be re-posted on next start",
+			"title", doc.Title, "url", doc.URL)
 		return
 	}
 
