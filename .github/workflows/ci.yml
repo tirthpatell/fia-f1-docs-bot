@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 12 * * *' # daily at noon UTC
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: bot/go.mod
+
+      - name: Run govulncheck
+        working-directory: bot
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
