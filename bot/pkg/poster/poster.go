@@ -306,3 +306,20 @@ func truncateText(text string, limit int) string {
 
 	return text[:lastSpace] + ellipsis
 }
+
+// chunkURLs partitions urls into consecutive slices of length ≤ size.
+// Returns nil for an empty input. The last chunk may be shorter than size.
+func chunkURLs(urls []string, size int) [][]string {
+	if len(urls) == 0 {
+		return nil
+	}
+	chunks := make([][]string, 0, (len(urls)+size-1)/size)
+	for i := 0; i < len(urls); i += size {
+		end := i + size
+		if end > len(urls) {
+			end = len(urls)
+		}
+		chunks = append(chunks, urls[i:end])
+	}
+	return chunks
+}
