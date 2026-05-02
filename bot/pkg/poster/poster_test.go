@@ -20,6 +20,12 @@ func TestChunkURLs(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "non-positive size returns nil",
+			urls: []string{"a", "b", "c"},
+			size: 0,
+			want: nil,
+		},
+		{
 			name: "single",
 			urls: []string{"a"},
 			size: 20,

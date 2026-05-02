@@ -237,7 +237,7 @@ func (p *Poster) postSingleImage(ctx context.Context, imageURL, postText, replyT
 		Text:     postText,
 		ImageURL: imageURL,
 		ReplyTo:  replyToID,
-		TopicTag: TopicTag,
+		TopicTag: topicTagForReply(replyToID),
 	})
 	if err != nil {
 		ctxLog.Error("Failed to create image post", "error", err)
@@ -272,7 +272,7 @@ func (p *Poster) postCarousel(ctx context.Context, imageURLs []string, postText,
 		Text:     postText,
 		Children: containerIDs,
 		ReplyTo:  replyToID,
-		TopicTag: TopicTag,
+		TopicTag: topicTagForReply(replyToID),
 	})
 	if err != nil {
 		ctxLog.Error("Failed to create carousel post", "error", err)
@@ -359,10 +359,21 @@ func truncateText(text string, limit int) string {
 	return text[:lastSpace] + ellipsis
 }
 
+// topicTagForReply returns the topic tag to apply to a post: TopicTag for the
+// root post (empty replyToID), and "" for replies — the Threads API only
+// allows topic tags on root posts, not on replies.
+func topicTagForReply(replyToID string) string {
+	if replyToID == "" {
+		return TopicTag
+	}
+	return ""
+}
+
 // chunkURLs partitions urls into consecutive slices of length ≤ size.
-// Returns nil for an empty input. The last chunk may be shorter than size.
+// Returns nil for an empty input or non-positive size. The last chunk may be
+// shorter than size.
 func chunkURLs(urls []string, size int) [][]string {
-	if len(urls) == 0 {
+	if len(urls) == 0 || size <= 0 {
 		return nil
 	}
 	chunks := make([][]string, 0, (len(urls)+size-1)/size)
