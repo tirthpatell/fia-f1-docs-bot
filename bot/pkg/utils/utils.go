@@ -92,7 +92,7 @@ func (c *Client) UploadImage(ctx context.Context, img image.Image) (string, erro
 	// Create request
 	uploadURL := fmt.Sprintf("%s/api/image/upload", c.BaseURL)
 	ctxLog.Debug("Creating upload request", "url", uploadURL)
-	req, err := http.NewRequest("POST", uploadURL, body)
+	req, err := http.NewRequestWithContext(ctx, "POST", uploadURL, body)
 	if err != nil {
 		ctxLog.Error("Failed to create request", "error", err)
 		return "", fmt.Errorf("failed to create request: %v", err)

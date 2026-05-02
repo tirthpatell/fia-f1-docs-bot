@@ -7,6 +7,7 @@ require (
 	github.com/lib/pq v1.12.0
 	github.com/spf13/viper v1.21.0
 	github.com/tirthpatell/threads-go v1.7.1
+	golang.org/x/sync v0.20.0
 )
 
 require (
