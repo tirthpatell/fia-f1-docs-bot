@@ -11,16 +11,18 @@ import (
 	"bot/pkg/utils"
 
 	"github.com/tirthpatell/threads-go"
+	"golang.org/x/sync/errgroup"
 )
 
 // Package logger
 var log = logger.Package("poster")
 
 const (
-	maxCharacterLimit = 500
-	maxImagesPerPost  = 20
-	ellipsis          = "..."
-	TopicTag          = "F1Threads"
+	maxCharacterLimit    = 500
+	maxImagesPerPost     = 20
+	maxConcurrentUploads = 5
+	ellipsis             = "..."
+	TopicTag             = "F1Threads"
 )
 
 // Poster is a struct that holds the configuration for the poster
@@ -189,28 +191,34 @@ func (p *Poster) PostTextOnly(ctx context.Context, text string) error {
 	return nil
 }
 
-// uploadImages uploads images to Picsur and returns their URLs
+// uploadImages uploads images to Picsur in parallel (bounded by
+// maxConcurrentUploads) and returns their URLs in the original order. The
+// first upload error cancels the remaining uploads via the errgroup context.
 func (p *Poster) uploadImages(ctx context.Context, images []image.Image) ([]string, error) {
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "uploadImages").
 		WithContext("imageCount", len(images))
 
-	var imageURLs []string
+	imageURLs := make([]string, len(images))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrentUploads)
 
 	for i, img := range images {
-		// Add a small delay between uploads to prevent overwhelming the service
-		if i > 0 {
-			time.Sleep(500 * time.Millisecond)
-		}
+		g.Go(func() error {
+			ctxLog.Debug("Uploading image", "index", i+1)
+			url, err := p.PicsurClient.UploadImage(gctx, img)
+			if err != nil {
+				ctxLog.Error("Failed to upload image", "index", i+1, "error", err)
+				return fmt.Errorf("failed to upload image %d: %v", i+1, err)
+			}
+			imageURLs[i] = url
+			ctxLog.Debug("Uploaded image", "index", i+1, "total", len(images))
+			return nil
+		})
+	}
 
-		ctxLog.Debug("Uploading image", "index", i+1)
-		imageURL, err := p.PicsurClient.UploadImage(ctx, img)
-		if err != nil {
-			ctxLog.Error("Failed to upload image", "index", i+1, "error", err)
-			return nil, fmt.Errorf("failed to upload image %d: %v", i+1, err)
-		}
-		imageURLs = append(imageURLs, imageURL)
-		ctxLog.Debug("Uploaded image", "index", i+1, "total", len(images))
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 
 	ctxLog.Info("All images uploaded successfully", "count", len(imageURLs))
