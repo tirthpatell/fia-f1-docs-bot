@@ -18,6 +18,7 @@ var log = logger.Package("poster")
 
 const (
 	maxCharacterLimit = 500
+	maxImagesPerPost  = 20
 	ellipsis          = "..."
 	TopicTag          = "F1Threads"
 )
@@ -55,16 +56,26 @@ func New(accessToken, userID, clientID, clientSecret, redirectURI, picsurAPI, pi
 	}, nil
 }
 
-// Post posts the images to Threads
+// Post posts the images to Threads. When more than maxImagesPerPost images are
+// provided, the post is split into a chain: the first chunk becomes the root
+// post (with the AI summary text); each subsequent chunk is posted as an
+// image-only reply to the previous post in the chain.
+//
+// Failure policy:
+//   - Root post failure: returns the error; caller skips marking the document
+//     as processed and will retry on the next scrape cycle.
+//   - Reply chunk failure: logs the failure with the root post ID and chunk
+//     index, then returns nil. The root post and any earlier replies remain
+//     published; the document is marked processed so we don't re-publish the
+//     root on the next cycle. Some tail images may be lost.
 func (p *Poster) Post(ctx context.Context, images []image.Image, title string, publishTime time.Time, documentURL, aiSummary string) error {
 	start := time.Now()
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "Post")
 
-	// Limit to 20 images if there are more
-	if len(images) > 20 {
-		ctxLog.Warn("Limiting images due to Threads API limitations", "original", len(images), "limited", 20)
-		images = images[:20]
+	if len(images) == 0 {
+		ctxLog.Warn("Post called with zero images; nothing to do")
+		return nil
 	}
 
 	// Upload images to Picsur
@@ -83,45 +94,63 @@ func (p *Poster) Post(ctx context.Context, images []image.Image, title string, p
 		"count", len(imageURLs),
 		"upload_duration_ms", uploadDuration.Milliseconds())
 
-	// Format the text for the post
+	// Format the text for the root post
 	ctxLog.Debug("Formatting post text")
 	postText, err := p.formatPostText(ctx, title, publishTime, documentURL, aiSummary)
 	if err != nil {
 		ctxLog.ErrorWithType("Failed to format post text", err)
 		return err
 	}
-
 	ctxLog.Debug("Post character count", "chars", len(postText))
 
-	// Determine whether to post a single image or a carousel based on the number of images
-	var postErr error
+	// Partition images into chunks of ≤ maxImagesPerPost
+	chunks := chunkURLs(imageURLs, maxImagesPerPost)
+	ctxLog.Info("Posting to Threads",
+		"image_count", len(imageURLs),
+		"chunk_count", len(chunks))
+
+	// Post the root chunk
 	postStart := time.Now()
+	rootPost, err := p.postChunk(ctx, chunks[0], postText, "")
+	if err != nil {
+		ctxLog.ErrorWithType("Failed to post root chunk to Threads", err,
+			"chunk_size", len(chunks[0]),
+			"upload_duration_ms", uploadDuration.Milliseconds(),
+			"total_duration_ms", time.Since(start).Milliseconds())
+		return err
+	}
+	ctxLog.Info("Root post published", "post_id", rootPost.ID, "images", len(chunks[0]))
 
-	if len(imageURLs) == 1 {
-		// Single image post
-		ctxLog.Info("Posting single image to Threads")
-		postErr = p.postSingleImage(ctx, imageURLs[0], postText)
-	} else if len(imageURLs) >= 2 && len(imageURLs) <= 20 {
-		// Carousel post
-		ctxLog.Info("Posting carousel to Threads", "images", len(imageURLs))
-		postErr = p.postCarousel(ctx, imageURLs, postText)
-	} else {
-		ctxLog.Error("Invalid number of images", "count", len(imageURLs))
-		return fmt.Errorf("invalid number of images: %d. Must be between 1 and 20", len(imageURLs))
+	// Chain replies for the remaining chunks. chunk_index in logs is 1-based;
+	// the root post is chunk 1, the first reply is chunk 2, etc.
+	prevID := rootPost.ID
+	for i := 1; i < len(chunks); i++ {
+		replyPost, replyErr := p.postChunk(ctx, chunks[i], "", prevID)
+		if replyErr != nil {
+			// Loss-tolerant: log loudly, stop the chain, but do not fail the
+			// whole Post() call. Caller will mark the document as processed so
+			// we don't re-publish the root on the next cycle.
+			ctxLog.ErrorWithType("Failed to post reply chunk; remaining images dropped", replyErr,
+				"root_post_id", rootPost.ID,
+				"chunk_index", i+1,
+				"total_chunks", len(chunks),
+				"chunk_size", len(chunks[i]),
+				"dropped_chunks", len(chunks)-i)
+			break
+		}
+		ctxLog.Info("Reply chunk published",
+			"post_id", replyPost.ID,
+			"reply_to", prevID,
+			"chunk_index", i+1,
+			"total_chunks", len(chunks),
+			"images", len(chunks[i]))
+		prevID = replyPost.ID
 	}
 
-	postDuration := time.Since(postStart)
 	totalDuration := time.Since(start)
-
-	if postErr != nil {
-		ctxLog.ErrorWithType("Failed to post to Threads", postErr,
-			"post_duration_ms", postDuration.Milliseconds(),
-			"total_duration_ms", totalDuration.Milliseconds())
-		return postErr
-	}
-
-	ctxLog.Info("Post to Threads completed successfully",
-		"post_duration_ms", postDuration.Milliseconds(),
+	ctxLog.Info("Post to Threads completed",
+		"chunks_total", len(chunks),
+		"posting_duration_ms", time.Since(postStart).Milliseconds(),
 		"upload_duration_ms", uploadDuration.Milliseconds(),
 		"total_duration_ms", totalDuration.Milliseconds())
 
@@ -188,63 +217,78 @@ func (p *Poster) uploadImages(ctx context.Context, images []image.Image) ([]stri
 	return imageURLs, nil
 }
 
-// postSingleImage posts a single image to Threads
-func (p *Poster) postSingleImage(ctx context.Context, imageURL, postText string) error {
+// postSingleImage posts a single image to Threads. If replyToID is non-empty,
+// the post is created as a reply to that post.
+func (p *Poster) postSingleImage(ctx context.Context, imageURL, postText, replyToID string) (*threads.Post, error) {
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "postSingleImage")
 
-	ctxLog.Debug("Creating single image post", "url", imageURL)
+	ctxLog.Debug("Creating single image post", "url", imageURL, "reply_to", replyToID)
 
-	// Use the threads-go client to create image post
-	_, err := p.ThreadsClient.CreateImagePost(ctx, &threads.ImagePostContent{
+	post, err := p.ThreadsClient.CreateImagePost(ctx, &threads.ImagePostContent{
 		Text:     postText,
 		ImageURL: imageURL,
+		ReplyTo:  replyToID,
 		TopicTag: TopicTag,
 	})
 	if err != nil {
 		ctxLog.Error("Failed to create image post", "error", err)
-		return fmt.Errorf("failed to create image post: %v", err)
+		return nil, fmt.Errorf("failed to create image post: %v", err)
 	}
 
-	ctxLog.Debug("Successfully posted single image")
-	return nil
+	ctxLog.Debug("Successfully posted single image", "post_id", post.ID)
+	return post, nil
 }
 
-// postCarousel posts multiple images as a carousel to Threads
-func (p *Poster) postCarousel(ctx context.Context, imageURLs []string, postText string) error {
+// postCarousel posts multiple images as a carousel to Threads. If replyToID
+// is non-empty, the carousel is posted as a reply to that post.
+func (p *Poster) postCarousel(ctx context.Context, imageURLs []string, postText, replyToID string) (*threads.Post, error) {
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "postCarousel").
 		WithContext("imageCount", len(imageURLs))
 
 	var containerIDs []string
 
-	// Create media containers for each image in the carousel
 	for i, imageURL := range imageURLs {
 		ctxLog.Debug("Creating media container for carousel image", "index", i+1)
 		containerID, err := p.ThreadsClient.CreateMediaContainer(ctx, threads.MediaTypeImage, imageURL, "")
 		if err != nil {
 			ctxLog.Error("Failed to create media container", "index", i+1, "error", err)
-			return fmt.Errorf("failed to create media container: %v", err)
+			return nil, fmt.Errorf("failed to create media container: %v", err)
 		}
-
-		containerIDStr := string(containerID)
-		containerIDs = append(containerIDs, containerIDStr)
+		containerIDs = append(containerIDs, string(containerID))
 	}
 
-	// Create carousel post
-	ctxLog.Debug("Creating carousel post", "itemCount", len(containerIDs))
-	_, err := p.ThreadsClient.CreateCarouselPost(ctx, &threads.CarouselPostContent{
+	ctxLog.Debug("Creating carousel post", "itemCount", len(containerIDs), "reply_to", replyToID)
+	post, err := p.ThreadsClient.CreateCarouselPost(ctx, &threads.CarouselPostContent{
 		Text:     postText,
 		Children: containerIDs,
+		ReplyTo:  replyToID,
 		TopicTag: TopicTag,
 	})
 	if err != nil {
 		ctxLog.Error("Failed to create carousel post", "error", err)
-		return fmt.Errorf("failed to create carousel post: %v", err)
+		return nil, fmt.Errorf("failed to create carousel post: %v", err)
 	}
 
-	ctxLog.Debug("Successfully posted carousel")
-	return nil
+	ctxLog.Debug("Successfully posted carousel", "post_id", post.ID)
+	return post, nil
+}
+
+// postChunk posts a single chunk of 1..maxImagesPerPost image URLs and returns
+// the resulting post. text is attached to the post (use "" for image-only
+// replies). replyToID, when non-empty, makes this a reply to that post.
+func (p *Poster) postChunk(ctx context.Context, imageURLs []string, text, replyToID string) (*threads.Post, error) {
+	switch n := len(imageURLs); {
+	case n == 1:
+		return p.postSingleImage(ctx, imageURLs[0], text, replyToID)
+	case n >= 2 && n <= maxImagesPerPost:
+		return p.postCarousel(ctx, imageURLs, text, replyToID)
+	default:
+		// Unreachable from Post (chunkURLs guarantees 1..maxImagesPerPost);
+		// retained as defense for any future direct caller.
+		return nil, fmt.Errorf("invalid chunk size: %d (must be 1..%d)", n, maxImagesPerPost)
+	}
 }
 
 // formatPostText formats the text for a post
