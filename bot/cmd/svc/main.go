@@ -24,7 +24,7 @@ import (
 
 const (
 	maxConcurrentProcessing = 5               // Maximum number of documents to process concurrently
-	documentsToFetch        = 8               // Number of recent documents to check
+	documentsToFetch        = 15              // Number of recent documents to check
 	tempDir                 = "temp"          // Temporary directory for downloaded PDFs
 	shortRetryInterval      = 1 * time.Minute // Short retry interval for DB connection
 	longRetryInterval       = 5 * time.Minute // Long retry interval for DB connection
