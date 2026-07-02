@@ -326,20 +326,21 @@ func (p *Poster) formatPostText(ctx context.Context, title string, publishTime t
 			title, publishTime.Format("02-01-2006 15:04 MST"))
 	}
 
-	// Only attach the summary section when there is a summary; a failed
-	// generation should not leave a dangling "AI Summary:" label.
-	if aiSummary == "" {
-		return baseText, nil
+	// Only attach the summary section when there is a summary (a failed
+	// generation should not leave a dangling "AI Summary:" label) and there
+	// is room for it — the final truncation below would otherwise cut the
+	// text mid-label.
+	const summaryLabel = "\n\nAI Summary: "
+	remainingChars := maxCharacterLimit - utf8.RuneCountInString(baseText) - utf8.RuneCountInString(summaryLabel)
+
+	text := baseText
+	if aiSummary != "" && remainingChars > 0 {
+		text += summaryLabel + truncateText(aiSummary, remainingChars)
 	}
 
-	const summaryLabel = "\n\nAI Summary: "
-	remainingChars := maxCharacterLimit - utf8.RuneCountInString(baseText) - len(summaryLabel)
-
-	// Truncate AI summary if needed
-	truncatedSummary := truncateText(aiSummary, remainingChars)
-
-	// Combine all parts
-	return baseText + summaryLabel + truncatedSummary, nil
+	// Final guard: an unusually long title can push baseText itself past the
+	// limit, so truncate the assembled text as a whole.
+	return truncateText(text, maxCharacterLimit), nil
 }
 
 // truncateText truncates text to the specified limit (counted in runes, since
