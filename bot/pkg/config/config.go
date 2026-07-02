@@ -54,7 +54,7 @@ func Load() (*Config, error) {
 	viper.SetDefault("DOCUMENTS_TO_FETCH", 15)
 	// Comma-separated Gemini models in order of preference; a ":thinking"
 	// suffix enables thinking for that model.
-	viper.SetDefault("GEMINI_MODELS", "gemini-3.1-flash-lite-preview:thinking,gemini-3.1-flash-lite:thinking,gemini-2.5-flash-lite")
+	viper.SetDefault("GEMINI_MODELS", "gemini-3.1-flash-lite:thinking,gemini-2.5-flash-lite")
 	viper.SetDefault("DB_PORT", "5432")
 	viper.SetDefault("DB_SSL_MODE", "disable")
 	viper.SetDefault("LOG_LEVEL", "info")
