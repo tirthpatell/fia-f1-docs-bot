@@ -145,6 +145,21 @@ func NewPostgres(host, port, user, password, dbname, sslmode string) (StorageInt
 		}
 	}
 
+	// Ensure the composite unique index exists regardless of how the schema
+	// was provisioned (fresh create, migrated, or manual): AddProcessedDocument's
+	// ON CONFLICT (title, url) fails at runtime without a matching unique
+	// index. Both the CREATE TABLE UNIQUE clause and the migration's ADD
+	// CONSTRAINT back their constraint with an index of this name, so this is
+	// a no-op on healthy schemas.
+	_, err = db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS processed_documents_title_url_key
+		ON processed_documents (title, url)
+	`)
+	if err != nil {
+		ctxLog.Error("Error ensuring unique index on (title, url)", "error", err)
+		return nil, fmt.Errorf("error ensuring unique index on (title, url): %v", err)
+	}
+
 	ctxLog.Info("PostgreSQL storage initialized successfully")
 	return &PostgresStorage{
 		db: db,
@@ -152,10 +167,10 @@ func NewPostgres(host, port, user, password, dbname, sslmode string) (StorageInt
 }
 
 // CheckConnection checks if the database connection is still active
-func (s *PostgresStorage) CheckConnection() error {
-	ctxLog := log.WithContext("method", "CheckConnection")
+func (s *PostgresStorage) CheckConnection(ctx context.Context) error {
+	ctxLog := log.WithRequestContext(ctx).WithContext("method", "CheckConnection")
 
-	err := s.db.Ping()
+	err := s.db.PingContext(ctx)
 	if err != nil {
 		ctxLog.Error("Database connection check failed", "error", err)
 	} else {

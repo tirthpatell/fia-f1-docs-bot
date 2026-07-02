@@ -41,7 +41,7 @@ func waitForDBConnection(ctx context.Context, store storage.StorageInterface) bo
 	// Get context-aware logger
 	dbLog := log.WithRequestContext(ctx).WithContext("component", "database")
 
-	err := store.CheckConnection()
+	err := store.CheckConnection(ctx)
 	if err == nil {
 		return true
 	}
@@ -58,7 +58,7 @@ func waitForDBConnection(ctx context.Context, store storage.StorageInterface) bo
 			return false
 		}
 
-		if err := store.CheckConnection(); err != nil {
+		if err := store.CheckConnection(ctx); err != nil {
 			dbLog.Error("Database still unreachable", "error", err)
 			interval = longRetryInterval
 		} else {
@@ -198,7 +198,7 @@ func main() {
 		healthLog := log.WithContext("component", "health_check")
 
 		// Check database connection
-		dbHealthy := store.CheckConnection() == nil
+		dbHealthy := store.CheckConnection(r.Context()) == nil
 
 		uptime := time.Since(startTime)
 		goroutines := runtime.NumGoroutine()
@@ -346,14 +346,16 @@ func main() {
 			var wg sync.WaitGroup
 			semaphore := make(chan struct{}, maxConcurrentProcessing)
 
-			// Create a map to track processed documents and then pass it to log
-			processedDocs := make(map[string]bool)
+			// Track skipped documents for a single summary log line. A slice
+			// (not a title-keyed map) so same-title documents with different
+			// URLs are each counted.
+			var skippedDocs []string
 
 			for _, doc := range docs {
 				// Skip already processed documents (checked before the recall
 				// handling so it covers recalled documents too)
 				if alreadyProcessed[storage.DocKey(doc.Title, doc.URL)] {
-					processedDocs[doc.Title] = true
+					skippedDocs = append(skippedDocs, doc.Title)
 					continue
 				}
 
@@ -381,8 +383,8 @@ func main() {
 						cycleLog.Error("Error updating storage", "error", err)
 					}
 
-					// Add to the processed docs map to avoid multiple notices
-					processedDocs[doc.Title] = true
+					// Include in the skipped-documents summary log
+					skippedDocs = append(skippedDocs, doc.Title)
 
 					continue
 				}
@@ -408,8 +410,8 @@ func main() {
 			}
 
 			// Log skipped documents after the loop (if any)
-			if len(processedDocs) > 0 {
-				cycleLog.Info("Skipping already processed document(s)", "Documents", processedDocs)
+			if len(skippedDocs) > 0 {
+				cycleLog.Info("Skipping already processed document(s)", "count", len(skippedDocs), "documents", skippedDocs)
 			}
 
 			// Wait for all goroutines to finish

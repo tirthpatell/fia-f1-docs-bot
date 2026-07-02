@@ -23,7 +23,7 @@ type StorageInterface interface {
 	FilterProcessed(ctx context.Context, docs []*scraper.Document) (map[string]bool, error)
 
 	// CheckConnection checks if the database connection is still active
-	CheckConnection() error
+	CheckConnection(ctx context.Context) error
 
 	// Close closes the storage (if needed)
 	Close() error
