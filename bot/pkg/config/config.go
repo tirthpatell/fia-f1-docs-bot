@@ -24,7 +24,9 @@ type Config struct {
 	ThreadsClientSecret string `mapstructure:"THREADS_CLIENT_SECRET"`
 	ThreadsRedirectURI  string `mapstructure:"THREADS_REDIRECT_URI"`
 	ScrapeInterval      int    `mapstructure:"SCRAPE_INTERVAL"`
+	DocumentsToFetch    int    `mapstructure:"DOCUMENTS_TO_FETCH"`
 	GeminiAPIKey        string `mapstructure:"GEMINI_API_KEY"`
+	GeminiModels        string `mapstructure:"GEMINI_MODELS"`
 	PicsurAPI           string `mapstructure:"PICSUR_API"`
 	PicsurURL           string `mapstructure:"PICSUR_URL"`
 	ShortenerAPIKey     string `mapstructure:"SHORTENER_API_KEY"`
@@ -49,6 +51,10 @@ func Load() (*Config, error) {
 
 	// Set default values before unmarshalling so they take effect
 	viper.SetDefault("SCRAPE_INTERVAL", 30)
+	viper.SetDefault("DOCUMENTS_TO_FETCH", 15)
+	// Comma-separated Gemini models in order of preference; a ":thinking"
+	// suffix enables thinking for that model.
+	viper.SetDefault("GEMINI_MODELS", "gemini-3.1-flash-lite:thinking,gemini-2.5-flash-lite")
 	viper.SetDefault("DB_PORT", "5432")
 	viper.SetDefault("DB_SSL_MODE", "disable")
 	viper.SetDefault("LOG_LEVEL", "info")
@@ -83,6 +89,9 @@ func Load() (*Config, error) {
 	if cfg.GeminiAPIKey == "" {
 		return nil, fmt.Errorf("GEMINI_API_KEY is required")
 	}
+	if cfg.GeminiModels == "" {
+		return nil, fmt.Errorf("GEMINI_MODELS is required")
+	}
 	if cfg.PicsurURL == "" {
 		return nil, fmt.Errorf("PICSUR_URL is required")
 	}
@@ -91,6 +100,10 @@ func Load() (*Config, error) {
 	}
 	if cfg.ShortenerURL == "" {
 		return nil, fmt.Errorf("SHORTENER_URL is required")
+	}
+
+	if cfg.DocumentsToFetch <= 0 {
+		return nil, fmt.Errorf("DOCUMENTS_TO_FETCH must be positive, got %d", cfg.DocumentsToFetch)
 	}
 
 	// Validate PostgreSQL configuration

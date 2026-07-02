@@ -24,7 +24,6 @@ import (
 
 const (
 	maxConcurrentProcessing = 5               // Maximum number of documents to process concurrently
-	documentsToFetch        = 15              // Number of recent documents to check
 	tempDir                 = "temp"          // Temporary directory for downloaded PDFs
 	shortRetryInterval      = 1 * time.Minute // Short retry interval for DB connection
 	longRetryInterval       = 5 * time.Minute // Long retry interval for DB connection
@@ -34,49 +33,50 @@ const (
 // Global logger
 var log *logger.Logger
 
-// waitForDBConnection attempts to establish a database connection with retries.
+// waitForDBConnection waits until the database is reachable, retrying with a
+// short interval first and a long interval after that. sql.DB is a
+// self-healing pool, so a successful ping is all that is needed to recover.
 // Returns false if the context was cancelled (shutdown requested).
 func waitForDBConnection(ctx context.Context, store storage.StorageInterface) bool {
 	// Get context-aware logger
 	dbLog := log.WithRequestContext(ctx).WithContext("component", "database")
 
-	// First try with short interval
-	if err := store.CheckConnection(); err != nil {
-		dbLog.Error("Database connection lost", "error", err)
-		dbLog.Info("Waiting before retrying", "interval", shortRetryInterval)
+	err := store.CheckConnection(ctx)
+	if err == nil {
+		return true
+	}
+
+	dbLog.Error("Database connection lost", "error", err)
+
+	interval := shortRetryInterval
+	for {
+		dbLog.Info("Waiting before retrying", "interval", interval)
 
 		select {
-		case <-time.After(shortRetryInterval):
+		case <-time.After(interval):
 		case <-ctx.Done():
 			return false
 		}
 
-		// Try to reconnect
-		if err := store.Reconnect(); err != nil {
-			dbLog.Error("Failed to reconnect to database", "error", err)
-
-			// Keep trying with long interval until successful or context cancelled
-			for {
-				dbLog.Info("Waiting before retrying", "interval", longRetryInterval)
-
-				select {
-				case <-time.After(longRetryInterval):
-				case <-ctx.Done():
-					return false
-				}
-
-				if err := store.Reconnect(); err != nil {
-					dbLog.Error("Failed to reconnect to database", "error", err)
-				} else {
-					dbLog.Info("Successfully reconnected to database")
-					break
-				}
-			}
+		if err := store.CheckConnection(ctx); err != nil {
+			dbLog.Error("Database still unreachable", "error", err)
+			interval = longRetryInterval
 		} else {
-			dbLog.Info("Successfully reconnected to database")
+			dbLog.Info("Database connection re-established")
+			return true
 		}
 	}
-	return true
+}
+
+// sleepOrShutdown sleeps for the given duration. Returns false if the context
+// was cancelled (shutdown requested) before the duration elapsed.
+func sleepOrShutdown(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-time.After(d):
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func main() {
@@ -160,9 +160,11 @@ func main() {
 	appLog.Info("Initializing summarizer")
 	summarizer, err := summary.New(summary.Config{
 		APIKey: cfg.GeminiAPIKey,
+		Models: cfg.GeminiModels,
 	})
 	if err != nil {
 		appLog.Error("Failed to initialize summarizer", "error", err)
+		os.Exit(1)
 	}
 	defer summarizer.Close()
 
@@ -196,7 +198,7 @@ func main() {
 		healthLog := log.WithContext("component", "health_check")
 
 		// Check database connection
-		dbHealthy := store.CheckConnection() == nil
+		dbHealthy := store.CheckConnection(r.Context()) == nil
 
 		uptime := time.Since(startTime)
 		goroutines := runtime.NumGoroutine()
@@ -283,9 +285,11 @@ func main() {
 		}()
 
 		for {
+			// bgCtx is cancelled by main() on shutdown. Watching it here
+			// (rather than shutdownChan, whose single signal is consumed by
+			// main's blocking receive) is what lets this loop actually exit.
 			select {
-			case <-shutdownChan:
-				// Shutdown signal received, exit the loop
+			case <-bgCtx.Done():
 				return
 			default:
 				// Continue with normal processing
@@ -304,41 +308,54 @@ func main() {
 				return
 			}
 
-			docs, err := sc.FetchLatestDocuments(cycleCtx, documentsToFetch)
+			docs, err := sc.FetchLatestDocuments(cycleCtx, cfg.DocumentsToFetch)
 			if err != nil {
 				cycleLog.Error("Error fetching documents", "error", err)
 				cycleLog.Info("Sleeping before retrying", "seconds", cfg.ScrapeInterval)
-				time.Sleep(time.Duration(cfg.ScrapeInterval) * time.Second)
+				if !sleepOrShutdown(bgCtx, time.Duration(cfg.ScrapeInterval)*time.Second) {
+					return
+				}
 				continue
 			}
 
 			if len(docs) == 0 {
 				cycleLog.Info("No documents found for the current Grand Prix")
 				cycleLog.Info("Sleeping before retrying", "seconds", cfg.ScrapeInterval)
-				time.Sleep(time.Duration(cfg.ScrapeInterval) * time.Second)
+				if !sleepOrShutdown(bgCtx, time.Duration(cfg.ScrapeInterval)*time.Second) {
+					return
+				}
 				continue
 			}
 
 			cycleLog.Info("Documents fetched", "count", len(docs))
 
-			// Create a worker pool with limited concurrency
-			var wg sync.WaitGroup
-			var workerCount int
-			semaphore := make(chan struct{}, maxConcurrentProcessing)
-
-			// Create a map to track processed documents and then pass it to log
-			processedDocs := make(map[string]bool)
-
-			for _, doc := range docs {
-				// Check database connection before checking if document is processed
-				if !waitForDBConnection(bgCtx, store) {
-					wg.Wait()
+			// Check which documents are already processed in a single query.
+			// On error, skip the cycle rather than assume "not processed" —
+			// proceeding on a failed check could re-post documents.
+			alreadyProcessed, err := store.FilterProcessed(cycleCtx, docs)
+			if err != nil {
+				cycleLog.Error("Error checking processed documents", "error", err)
+				cycleLog.Info("Sleeping before retrying", "seconds", cfg.ScrapeInterval)
+				if !sleepOrShutdown(bgCtx, time.Duration(cfg.ScrapeInterval)*time.Second) {
 					return
 				}
+				continue
+			}
 
-				// Skip already processed documents (moved this check earlier to handle all docs including recalled ones)
-				if store.IsDocumentProcessed(cycleCtx, doc) {
-					processedDocs[doc.Title] = true
+			// Create a worker pool with limited concurrency
+			var wg sync.WaitGroup
+			semaphore := make(chan struct{}, maxConcurrentProcessing)
+
+			// Track skipped documents for a single summary log line. A slice
+			// (not a title-keyed map) so same-title documents with different
+			// URLs are each counted.
+			var skippedDocs []string
+
+			for _, doc := range docs {
+				// Skip already processed documents (checked before the recall
+				// handling so it covers recalled documents too)
+				if alreadyProcessed[storage.DocKey(doc.Title, doc.URL)] {
+					skippedDocs = append(skippedDocs, doc.Title)
 					continue
 				}
 
@@ -366,8 +383,8 @@ func main() {
 						cycleLog.Error("Error updating storage", "error", err)
 					}
 
-					// Add to the processed docs map to avoid multiple notices
-					processedDocs[doc.Title] = true
+					// Include in the skipped-documents summary log
+					skippedDocs = append(skippedDocs, doc.Title)
 
 					continue
 				}
@@ -375,7 +392,6 @@ func main() {
 				// Limit concurrency using semaphore
 				semaphore <- struct{}{}
 				wg.Add(1)
-				workerCount++
 
 				go func(document *scraper.Document) {
 					defer wg.Done()
@@ -394,23 +410,17 @@ func main() {
 			}
 
 			// Log skipped documents after the loop (if any)
-			if len(processedDocs) > 0 {
-				cycleLog.Info("Skipping already processed document(s)", "Documents", processedDocs)
+			if len(skippedDocs) > 0 {
+				cycleLog.Info("Skipping already processed document(s)", "count", len(skippedDocs), "documents", skippedDocs)
 			}
 
 			// Wait for all goroutines to finish
 			wg.Wait()
 
-			// GC once per cycle after all workers complete. Running it here
-			// (rather than in each worker) avoids N back-to-back STW pauses
-			// when multiple workers finish concurrently. Skip when no workers
-			// were spawned (all docs already processed).
-			if workerCount > 0 {
-				runtime.GC()
-			}
-
 			cycleLog.Info("Sleeping before next check", "seconds", cfg.ScrapeInterval)
-			time.Sleep(time.Duration(cfg.ScrapeInterval) * time.Second)
+			if !sleepOrShutdown(bgCtx, time.Duration(cfg.ScrapeInterval)*time.Second) {
+				return
+			}
 		}
 	}()
 
@@ -539,16 +549,6 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 	}
 
 	docLog.Info("Successfully posted to Threads")
-
-	// Drop image references before potentially blocking on DB reconnect.
-	// Each page is a Go-managed []byte (go-fitz copies pixel data out of C
-	// memory inside Image() and frees the C pixmap before returning), so
-	// nil-ing here lets the GC reclaim the large buffers while this goroutine
-	// may be blocked waiting for a DB reconnect.
-	for i := range images {
-		images[i] = nil
-	}
-	images = nil
 
 	// Check database connection before updating
 	if !waitForDBConnection(ctx, store) {

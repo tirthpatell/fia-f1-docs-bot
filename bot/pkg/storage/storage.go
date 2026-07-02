@@ -18,15 +18,18 @@ type StorageInterface interface {
 	// AddProcessedDocument adds a document to the processed documents list
 	AddProcessedDocument(ctx context.Context, doc ProcessedDocument) error
 
-	// IsDocumentProcessed checks if a document has been processed
-	IsDocumentProcessed(ctx context.Context, doc *scraper.Document) bool
+	// FilterProcessed returns the set of already-processed documents among
+	// docs, keyed by DocKey. Documents absent from the map are unprocessed.
+	FilterProcessed(ctx context.Context, docs []*scraper.Document) (map[string]bool, error)
 
 	// CheckConnection checks if the database connection is still active
-	CheckConnection() error
-
-	// Reconnect attempts to reconnect to the database if the connection is lost
-	Reconnect() error
+	CheckConnection(ctx context.Context) error
 
 	// Close closes the storage (if needed)
 	Close() error
+}
+
+// DocKey builds the lookup key used by FilterProcessed results.
+func DocKey(title, url string) string {
+	return title + "\x00" + url
 }
