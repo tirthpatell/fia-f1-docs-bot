@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"bot/pkg/logger"
@@ -16,10 +17,15 @@ var log = logger.Package("summary")
 
 type Summarizer struct {
 	client *genai.Client
+	models []modelEntry
 }
 
 type Config struct {
 	APIKey string
+	// Models is a comma-separated list of Gemini model names in order of
+	// preference. A ":thinking" suffix enables thinking for that model,
+	// e.g. "gemini-3.1-flash-lite:thinking,gemini-2.5-flash-lite".
+	Models string
 }
 
 type modelEntry struct {
@@ -27,19 +33,39 @@ type modelEntry struct {
 	useThinking bool
 }
 
-// Models in order of preference
-var modelPriority = []modelEntry{
-	{name: "gemini-3.1-flash-lite-preview", useThinking: true},
-	{name: "gemini-3.1-flash-lite", useThinking: true},
-	{name: "gemini-2.5-flash-lite"},
-	{name: "gemini-2.0-flash-lite"},
-	{name: "gemini-2.0-flash"},
-	{name: "gemini-1.5-flash-8b"},
+// parseModels parses a comma-separated model list (see Config.Models).
+func parseModels(s string) ([]modelEntry, error) {
+	var models []modelEntry
+	for entry := range strings.SplitSeq(s, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		name, suffix, found := strings.Cut(entry, ":")
+		model := modelEntry{name: name}
+		if found {
+			if suffix != "thinking" {
+				return nil, fmt.Errorf("invalid model entry %q: unknown suffix %q (only \":thinking\" is supported)", entry, suffix)
+			}
+			model.useThinking = true
+		}
+		models = append(models, model)
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("model list is empty")
+	}
+	return models, nil
 }
 
 // New creates a new instance of Summarizer
 func New(cfg Config) (*Summarizer, error) {
 	ctxLog := log.WithContext("method", "New")
+
+	models, err := parseModels(cfg.Models)
+	if err != nil {
+		ctxLog.Error("Invalid Gemini model list", "models", cfg.Models, "error", err)
+		return nil, fmt.Errorf("invalid Gemini model list %q: %w", cfg.Models, err)
+	}
 
 	ctx := context.Background()
 	ctxLog.Info("Creating Vertex AI client")
@@ -52,9 +78,10 @@ func New(cfg Config) (*Summarizer, error) {
 		return nil, fmt.Errorf("error creating Vertex AI client: %w", err)
 	}
 
-	ctxLog.Info("Summarizer initialized successfully")
+	ctxLog.Info("Summarizer initialized successfully", "models", cfg.Models)
 	return &Summarizer{
 		client: client,
+		models: models,
 	}, nil
 }
 
@@ -81,7 +108,7 @@ func (s *Summarizer) GenerateSummary(ctx context.Context, pdfPath string) (strin
 
 	// Try each model in order of priority
 	var lastError error
-	for _, model := range modelPriority {
+	for _, model := range s.models {
 		ctxLog.Debug("Attempting to generate summary", "model", model.name)
 		summary, err := s.tryGenerateSummaryWithModel(ctx, model, pdfData)
 		if err == nil {

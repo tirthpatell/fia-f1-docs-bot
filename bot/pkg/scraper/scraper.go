@@ -50,6 +50,17 @@ func getRandomUserAgent() string {
 	return userAgents[rand.Intn(len(userAgents))]
 }
 
+// parisTZ is the timezone FIA publish dates are expressed in. Loaded once;
+// falls back to UTC if the tz database is unavailable.
+var parisTZ = func() *time.Location {
+	loc, err := time.LoadLocation("Europe/Paris")
+	if err != nil {
+		log.Error("Failed to load Europe/Paris timezone, falling back to UTC", "error", err)
+		return time.UTC
+	}
+	return loc
+}()
+
 // FetchLatestDocuments retrieves the specified number of most recent documents
 func (s *Scraper) FetchLatestDocuments(ctx context.Context, limit int) ([]*Document, error) {
 	// Get a context-aware logger
@@ -91,13 +102,6 @@ func (s *Scraper) FetchLatestDocuments(ctx context.Context, limit int) ([]*Docum
 
 					fullURL := "https://www.fia.com" + relativeURL
 
-					// Load the Europe/Paris timezone
-					parisTZ, err := time.LoadLocation("Europe/Paris")
-					if err != nil {
-						ctxLog.Error("Failed to load Europe/Paris timezone", "error", err)
-						parisTZ = time.UTC // Fallback to UTC if loading fails
-					}
-
 					// Parse the time assuming it's in the Paris timezone
 					published, err := time.ParseInLocation("02.01.06 15:04", publishedStr, parisTZ)
 					if err != nil {
@@ -117,7 +121,10 @@ func (s *Scraper) FetchLatestDocuments(ctx context.Context, limit int) ([]*Docum
 					documents = append(documents, doc)
 					ctxLog.Debug("Found document", "title", title, "publishedUTC", publishedUTC)
 				})
-				// Stop after processing the active Grand Prix
+				// Note: this return only ends the current ForEach callback
+				// iteration; it does not break the loop. Only one Grand Prix
+				// is marked active at a time, so the other iterations are
+				// no-ops anyway.
 				return
 			}
 		})

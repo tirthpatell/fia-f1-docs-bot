@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"bot/pkg/logger"
@@ -15,10 +16,11 @@ import (
 // Package logger
 var log = logger.Package("storage")
 
-// PostgresStorage implements the StorageInterface using PostgreSQL
+// PostgresStorage implements the StorageInterface using PostgreSQL.
+// sql.DB is a self-healing connection pool: dropped connections are
+// re-established transparently, so there is no explicit reconnect logic.
 type PostgresStorage struct {
-	db      *sql.DB
-	connStr string
+	db *sql.DB
 }
 
 // NewPostgres creates a new PostgreSQL storage
@@ -145,44 +147,8 @@ func NewPostgres(host, port, user, password, dbname, sslmode string) (StorageInt
 
 	ctxLog.Info("PostgreSQL storage initialized successfully")
 	return &PostgresStorage{
-		db:      db,
-		connStr: connStr,
+		db: db,
 	}, nil
-}
-
-// Reconnect attempts to reconnect to the database
-func (s *PostgresStorage) Reconnect() error {
-	ctxLog := log.WithContext("method", "Reconnect")
-
-	// Close the existing connection if it exists
-	if s.db != nil {
-		ctxLog.Info("Closing existing database connection")
-		_ = s.db.Close() // Ignore close errors
-	}
-
-	// Create a new connection
-	ctxLog.Info("Creating new database connection")
-	db, err := sql.Open("postgres", s.connStr)
-	if err != nil {
-		ctxLog.Error("Error reconnecting to database", "error", err)
-		return fmt.Errorf("error reconnecting to database: %v", err)
-	}
-
-	// Re-apply connection pool settings
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(5 * time.Minute)
-
-	// Test the connection
-	if err := db.Ping(); err != nil {
-		ctxLog.Error("Error pinging database after reconnect", "error", err)
-		return fmt.Errorf("error pinging database after reconnect: %v", err)
-	}
-
-	// Update the db reference
-	s.db = db
-	ctxLog.Info("Successfully reconnected to database")
-	return nil
 }
 
 // CheckConnection checks if the database connection is still active
@@ -206,89 +172,89 @@ func (s *PostgresStorage) Close() error {
 	return s.db.Close()
 }
 
-// AddProcessedDocument adds a document to the processed documents list
+// AddProcessedDocument adds a document to the processed documents list.
+// The insert is atomic: the UNIQUE(title, url) constraint plus ON CONFLICT
+// DO NOTHING makes re-adding an already processed document a no-op.
 func (s *PostgresStorage) AddProcessedDocument(ctx context.Context, doc ProcessedDocument) error {
 	start := time.Now()
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "AddProcessedDocument").
 		WithContext("url", doc.URL)
 
-	// Check if the document already exists
-	var exists bool
-	ctxLog.Debug("Checking if document already exists")
-	checkStart := time.Now()
-	err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM processed_documents WHERE url = $1 AND title = $2)",
-		doc.URL, doc.Title).Scan(&exists)
-	checkDuration := time.Since(checkStart)
-
-	if err != nil {
-		ctxLog.ErrorWithType("Error checking if document exists", err,
-			"query_duration_ms", checkDuration.Milliseconds())
-		return fmt.Errorf("error checking if document exists: %v", err)
-	}
-
-	ctxLog.Debug("Document existence check completed",
-		"exists", exists,
-		"query_duration_ms", checkDuration.Milliseconds())
-
-	if exists {
-		ctxLog.Info("Document already processed, skipping",
-			"total_duration_ms", time.Since(start).Milliseconds())
-		return nil // Already processed
-	}
-
-	// Insert the document
 	ctxLog.Info(fmt.Sprintf("Adding document to processed list: %s", doc.Title))
-	insertStart := time.Now()
-	_, err = s.db.Exec(
-		"INSERT INTO processed_documents (title, url, timestamp) VALUES ($1, $2, $3)",
+	res, err := s.db.ExecContext(ctx,
+		"INSERT INTO processed_documents (title, url, timestamp) VALUES ($1, $2, $3) ON CONFLICT (title, url) DO NOTHING",
 		doc.Title, doc.URL, doc.Timestamp,
 	)
-	insertDuration := time.Since(insertStart)
-	totalDuration := time.Since(start)
+	duration := time.Since(start)
 
 	if err != nil {
 		ctxLog.ErrorWithType("Error inserting document", err,
-			"insert_duration_ms", insertDuration.Milliseconds(),
-			"total_duration_ms", totalDuration.Milliseconds())
+			"insert_duration_ms", duration.Milliseconds())
 		return fmt.Errorf("error inserting document: %v", err)
 	}
 
+	if rows, raErr := res.RowsAffected(); raErr == nil && rows == 0 {
+		ctxLog.Info("Document already processed, skipping",
+			"insert_duration_ms", duration.Milliseconds())
+		return nil
+	}
+
 	ctxLog.Info("Document added to processed list successfully",
-		"insert_duration_ms", insertDuration.Milliseconds(),
-		"total_duration_ms", totalDuration.Milliseconds())
+		"insert_duration_ms", duration.Milliseconds())
 
 	return nil
 }
 
-// IsDocumentProcessed checks if a document has been processed
-func (s *PostgresStorage) IsDocumentProcessed(ctx context.Context, doc *scraper.Document) bool {
+// FilterProcessed returns the set of already-processed documents among docs
+// in a single query, keyed by DocKey(title, url).
+func (s *PostgresStorage) FilterProcessed(ctx context.Context, docs []*scraper.Document) (map[string]bool, error) {
 	start := time.Now()
 	ctxLog := log.WithRequestContext(ctx).
-		WithContext("method", "IsDocumentProcessed")
+		WithContext("method", "FilterProcessed")
 
-	var exists bool
-	err := s.db.QueryRow("SELECT EXISTS(SELECT 1 FROM processed_documents WHERE url = $1 AND title = $2)",
-		doc.URL, doc.Title).Scan(&exists)
-	duration := time.Since(start)
+	processed := make(map[string]bool, len(docs))
+	if len(docs) == 0 {
+		return processed, nil
+	}
 
+	placeholders := make([]string, 0, len(docs))
+	args := make([]any, 0, len(docs)*2)
+	for i, doc := range docs {
+		placeholders = append(placeholders, fmt.Sprintf("($%d, $%d)", i*2+1, i*2+2))
+		args = append(args, doc.Title, doc.URL)
+	}
+
+	query := "SELECT title, url FROM processed_documents WHERE (title, url) IN (" +
+		strings.Join(placeholders, ", ") + ")"
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		// If there's a database error, we'll assume it's not processed
-		// The main loop will handle reconnection
-		ctxLog.ErrorWithType("Error checking if document exists", err,
-			"query_duration_ms", duration.Milliseconds())
-		return false
+		ctxLog.ErrorWithType("Error querying processed documents", err,
+			"query_duration_ms", time.Since(start).Milliseconds())
+		return nil, fmt.Errorf("error querying processed documents: %v", err)
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			ctxLog.Warn("Error closing rows", "error", err)
+		}
+	}()
+
+	for rows.Next() {
+		var title, url string
+		if err := rows.Scan(&title, &url); err != nil {
+			return nil, fmt.Errorf("error scanning processed document: %v", err)
+		}
+		processed[DocKey(title, url)] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating processed documents: %v", err)
 	}
 
-	ctxLog.Debug("Document processed check completed",
-		"exists", exists,
-		"query_duration_ms", duration.Milliseconds())
+	ctxLog.Debug("Processed documents check completed",
+		"checked", len(docs),
+		"already_processed", len(processed),
+		"query_duration_ms", time.Since(start).Milliseconds())
 
-	if exists {
-		ctxLog.Debug("Document is already processed")
-	} else {
-		ctxLog.Debug("Document is not processed yet")
-	}
-
-	return exists
+	return processed, nil
 }

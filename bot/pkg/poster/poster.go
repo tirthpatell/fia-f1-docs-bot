@@ -3,9 +3,9 @@ package poster
 import (
 	"context"
 	"fmt"
-	"image"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"bot/pkg/logger"
 	"bot/pkg/utils"
@@ -30,7 +30,6 @@ type Poster struct {
 	ThreadsClient   *threads.Client
 	PicsurClient    *utils.Client
 	ShortenerClient *utils.ShortenerClient
-	AccessToken     string
 }
 
 // New creates a new Poster
@@ -54,7 +53,6 @@ func New(accessToken, userID, clientID, clientSecret, redirectURI, picsurAPI, pi
 		ThreadsClient:   threadsClient,
 		PicsurClient:    utils.New(picsurAPI, picsurURL),
 		ShortenerClient: utils.NewShortenerClient(shortenerAPIKey, shortenerURL),
-		AccessToken:     accessToken,
 	}, nil
 }
 
@@ -70,7 +68,7 @@ func New(accessToken, userID, clientID, clientSecret, redirectURI, picsurAPI, pi
 //     index, then returns nil. The root post and any earlier replies remain
 //     published; the document is marked processed so we don't re-publish the
 //     root on the next cycle. Some tail images may be lost.
-func (p *Poster) Post(ctx context.Context, images []image.Image, title string, publishTime time.Time, documentURL, aiSummary string) error {
+func (p *Poster) Post(ctx context.Context, images [][]byte, title string, publishTime time.Time, documentURL, aiSummary string) error {
 	start := time.Now()
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "Post")
@@ -103,7 +101,7 @@ func (p *Poster) Post(ctx context.Context, images []image.Image, title string, p
 		ctxLog.ErrorWithType("Failed to format post text", err)
 		return err
 	}
-	ctxLog.Debug("Post character count", "chars", len(postText))
+	ctxLog.Debug("Post character count", "chars", utf8.RuneCountInString(postText))
 
 	// Partition images into chunks of ≤ maxImagesPerPost
 	chunks := chunkURLs(imageURLs, maxImagesPerPost)
@@ -166,8 +164,8 @@ func (p *Poster) PostTextOnly(ctx context.Context, text string) error {
 		WithContext("method", "PostTextOnly")
 
 	// Truncate text if it exceeds the character limit
-	if len(text) > maxCharacterLimit {
-		ctxLog.Warn("Truncating text due to character limit", "original", len(text), "limit", maxCharacterLimit)
+	if utf8.RuneCountInString(text) > maxCharacterLimit {
+		ctxLog.Warn("Truncating text due to character limit", "original", utf8.RuneCountInString(text), "limit", maxCharacterLimit)
 		text = truncateText(text, maxCharacterLimit)
 	}
 
@@ -191,10 +189,10 @@ func (p *Poster) PostTextOnly(ctx context.Context, text string) error {
 	return nil
 }
 
-// uploadImages uploads images to Picsur in parallel (bounded by
+// uploadImages uploads PNG-encoded images to Picsur in parallel (bounded by
 // maxConcurrentUploads) and returns their URLs in the original order. The
 // first upload error cancels the remaining uploads via the errgroup context.
-func (p *Poster) uploadImages(ctx context.Context, images []image.Image) ([]string, error) {
+func (p *Poster) uploadImages(ctx context.Context, images [][]byte) ([]string, error) {
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "uploadImages").
 		WithContext("imageCount", len(images))
@@ -321,25 +319,34 @@ func (p *Poster) formatPostText(ctx context.Context, title string, publishTime t
 	// Create the base text with or without the shortened URL
 	var baseText string
 	if shortenedURL != "" {
-		baseText = fmt.Sprintf("New document: %s\nPublished on: %s\nLink: %s\n\nAI Summary: ",
+		baseText = fmt.Sprintf("New document: %s\nPublished on: %s\nLink: %s",
 			title, publishTime.Format("02-01-2006 15:04 MST"), shortenedURL)
 	} else {
-		baseText = fmt.Sprintf("New document: %s\nPublished on: %s\n\nAI Summary: ",
+		baseText = fmt.Sprintf("New document: %s\nPublished on: %s",
 			title, publishTime.Format("02-01-2006 15:04 MST"))
 	}
 
-	remainingChars := maxCharacterLimit - len(baseText)
+	// Only attach the summary section when there is a summary; a failed
+	// generation should not leave a dangling "AI Summary:" label.
+	if aiSummary == "" {
+		return baseText, nil
+	}
+
+	const summaryLabel = "\n\nAI Summary: "
+	remainingChars := maxCharacterLimit - utf8.RuneCountInString(baseText) - len(summaryLabel)
 
 	// Truncate AI summary if needed
 	truncatedSummary := truncateText(aiSummary, remainingChars)
 
 	// Combine all parts
-	return baseText + truncatedSummary, nil
+	return baseText + summaryLabel + truncatedSummary, nil
 }
 
-// truncateText truncates text to the specified limit, adding an ellipsis
+// truncateText truncates text to the specified limit (counted in runes, since
+// the Threads limit is characters, not bytes), adding an ellipsis.
 func truncateText(text string, limit int) string {
-	if len(text) <= limit {
+	runes := []rune(text)
+	if len(runes) <= limit {
 		return text
 	}
 
@@ -350,13 +357,14 @@ func truncateText(text string, limit int) string {
 	}
 
 	// Find the last space before the limit to avoid cutting words in the middle
-	lastSpace := strings.LastIndex(text[:limit], " ")
+	truncated := string(runes[:limit])
+	lastSpace := strings.LastIndex(truncated, " ")
 	if lastSpace == -1 {
 		// If no space found, just cut at the limit
-		return text[:limit] + ellipsis
+		return truncated + ellipsis
 	}
 
-	return text[:lastSpace] + ellipsis
+	return truncated[:lastSpace] + ellipsis
 }
 
 // topicTagForReply returns the topic tag to apply to a post: TopicTag for the
@@ -378,10 +386,7 @@ func chunkURLs(urls []string, size int) [][]string {
 	}
 	chunks := make([][]string, 0, (len(urls)+size-1)/size)
 	for i := 0; i < len(urls); i += size {
-		end := i + size
-		if end > len(urls) {
-			end = len(urls)
-		}
+		end := min(i+size, len(urls))
 		chunks = append(chunks, urls[i:end])
 	}
 	return chunks

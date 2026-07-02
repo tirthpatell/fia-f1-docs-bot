@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"image"
-	"image/png"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -50,7 +48,9 @@ func New(apiKey, baseURL string) *Client {
 	}
 }
 
-func (c *Client) UploadImage(ctx context.Context, img image.Image) (string, error) {
+// UploadImage uploads an already PNG-encoded image to Picsur and returns its
+// public URL.
+func (c *Client) UploadImage(ctx context.Context, pngData []byte) (string, error) {
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "UploadImage")
 
@@ -58,14 +58,6 @@ func (c *Client) UploadImage(ctx context.Context, img image.Image) (string, erro
 	if c.BaseURL == "" {
 		ctxLog.Error("Picsur base URL not configured")
 		return "", fmt.Errorf("picsur base URL not configured")
-	}
-
-	// Encode image to PNG
-	var buf bytes.Buffer
-	ctxLog.Debug("Encoding image to PNG")
-	if err := png.Encode(&buf, img); err != nil {
-		ctxLog.Error("Failed to encode image", "error", err)
-		return "", fmt.Errorf("failed to encode image: %v", err)
 	}
 
 	// Prepare multipart form data
@@ -79,7 +71,7 @@ func (c *Client) UploadImage(ctx context.Context, img image.Image) (string, erro
 		ctxLog.Error("Failed to create form file", "error", err)
 		return "", fmt.Errorf("failed to create form file: %v", err)
 	}
-	if _, err := io.Copy(part, &buf); err != nil {
+	if _, err := part.Write(pngData); err != nil {
 		ctxLog.Error("Failed to copy image data", "error", err)
 		return "", fmt.Errorf("failed to copy image data: %v", err)
 	}
@@ -139,8 +131,13 @@ func EncodeURL(input string) string {
 	return strings.ReplaceAll(input, " ", "%20")
 }
 
-// ConvertToImages converts a PDF document to a slice of images
-func ConvertToImages(ctx context.Context, pdfPath string) ([]image.Image, error) {
+// renderDPI matches go-fitz's Image() default so output quality is unchanged.
+const renderDPI = 300
+
+// ConvertToImages converts a PDF document to a slice of PNG-encoded pages.
+// Encoding happens page by page so only one raw decoded page is held in
+// memory at a time.
+func ConvertToImages(ctx context.Context, pdfPath string) ([][]byte, error) {
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "ConvertToImages").
 		WithContext("pdfPath", pdfPath)
@@ -161,11 +158,11 @@ func ConvertToImages(ctx context.Context, pdfPath string) ([]image.Image, error)
 	numPages := doc.NumPage()
 	ctxLog.Debug("Converting PDF to images", "pages", numPages)
 
-	var images []image.Image
+	images := make([][]byte, 0, numPages)
 
 	for i := range numPages {
 		ctxLog.Debug("Converting page to image", "page", i+1)
-		img, err := doc.Image(i)
+		img, err := doc.ImagePNG(i, renderDPI)
 		if err != nil {
 			ctxLog.Error("Failed to convert page to image", "page", i+1, "error", err)
 			return nil, fmt.Errorf("failed to convert page %d to image: %v", i, err)

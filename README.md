@@ -185,12 +185,14 @@ The bot is configured using environment variables, loaded from a `.env` file via
 |---|---|---|---|
 | `FIA_URL` | No | 2025 season URL | FIA documents page URL |
 | `SCRAPE_INTERVAL` | No | `30` | Scraping interval in seconds |
+| `DOCUMENTS_TO_FETCH` | No | `15` | Number of recent documents to check each cycle |
 | `THREADS_ACCESS_TOKEN` | Yes | | Threads API access token |
 | `THREADS_USER_ID` | Yes | | Threads user ID |
 | `THREADS_CLIENT_ID` | Yes | | Threads OAuth client ID |
 | `THREADS_CLIENT_SECRET` | Yes | | Threads OAuth client secret |
 | `THREADS_REDIRECT_URI` | Yes | | Threads OAuth redirect URI |
 | `GEMINI_API_KEY` | Yes | | Google Gemini API key |
+| `GEMINI_MODELS` | No | `gemini-3.1-flash-lite-preview:thinking,gemini-3.1-flash-lite:thinking,gemini-2.5-flash-lite` | Comma-separated Gemini models in fallback order; append `:thinking` to enable thinking for a model |
 | `PICSUR_API` | Yes | | Picsur API key |
 | `PICSUR_URL` | Yes | | Picsur instance URL |
 | `SHORTENER_API_KEY` | Yes | | URL shortener API key |
