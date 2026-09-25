@@ -8,7 +8,9 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"bot/pkg/logger"
@@ -20,9 +22,22 @@ import (
 var log = logger.Package("utils")
 
 type Client struct {
-	ApiKey  string
+	ApiKey string
+	// BaseURL is the public URL used in image links (Threads fetches these)
 	BaseURL string
+	// UploadURL is where uploads are sent, e.g. a LAN address; defaults to BaseURL
+	UploadURL string
 }
+
+// NewHTTPClient returns an HTTP client that keeps enough idle connections per
+// host for concurrent requests (the default transport keeps only 2).
+func NewHTTPClient(timeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConnsPerHost = 16
+	return &http.Client{Timeout: timeout, Transport: transport}
+}
+
+var picsurHTTPClient = NewHTTPClient(60 * time.Second)
 
 type picsurResponse struct {
 	Success    bool `json:"success"`
@@ -38,13 +53,17 @@ type picsurResponse struct {
 	} `json:"data"`
 }
 
-func New(apiKey, baseURL string) *Client {
+func New(apiKey, baseURL, uploadURL string) *Client {
+	if uploadURL == "" {
+		uploadURL = baseURL
+	}
 	ctxLog := log.WithContext("method", "New")
-	ctxLog.Info("Creating new Picsur client", "baseURL", baseURL)
+	ctxLog.Info("Creating new Picsur client", "baseURL", baseURL, "uploadURL", uploadURL)
 
 	return &Client{
-		ApiKey:  apiKey,
-		BaseURL: baseURL,
+		ApiKey:    apiKey,
+		BaseURL:   baseURL,
+		UploadURL: strings.TrimSuffix(uploadURL, "/"),
 	}
 }
 
@@ -82,7 +101,7 @@ func (c *Client) UploadImage(ctx context.Context, pngData []byte) (string, error
 	}
 
 	// Create request
-	uploadURL := fmt.Sprintf("%s/api/image/upload", c.BaseURL)
+	uploadURL := fmt.Sprintf("%s/api/image/upload", c.UploadURL)
 	ctxLog.Debug("Creating upload request", "url", uploadURL)
 	req, err := http.NewRequestWithContext(ctx, "POST", uploadURL, body)
 	if err != nil {
@@ -95,8 +114,7 @@ func (c *Client) UploadImage(ctx context.Context, pngData []byte) (string, error
 
 	// Send request with timeout
 	ctxLog.Debug("Uploading image to Picsur")
-	httpClient := &http.Client{Timeout: 60 * time.Second}
-	resp, err := httpClient.Do(req)
+	resp, err := picsurHTTPClient.Do(req)
 	if err != nil {
 		ctxLog.Error("Failed to send request", "error", err)
 		return "", fmt.Errorf("failed to send request: %v", err)
@@ -134,42 +152,101 @@ func EncodeURL(input string) string {
 // renderDPI matches go-fitz's Image() default so output quality is unchanged.
 const renderDPI = 300
 
-// ConvertToImages converts a PDF document to a slice of PNG-encoded pages.
-// Encoding happens page by page so only one raw decoded page is held in
-// memory at a time.
-func ConvertToImages(ctx context.Context, pdfPath string) ([][]byte, error) {
-	ctxLog := log.WithRequestContext(ctx).
-		WithContext("method", "ConvertToImages").
-		WithContext("pdfPath", pdfPath)
+// renderSlots caps concurrent page renders across all documents at the CPU
+// count; more would only add memory (~35 MB per 300 DPI page).
+var renderSlots = make(chan struct{}, runtime.NumCPU())
 
-	ctxLog.Debug("Opening PDF document")
+// PDFPageCount returns the number of pages in a PDF.
+func PDFPageCount(pdfPath string) (int, error) {
 	doc, err := fitz.New(pdfPath)
 	if err != nil {
-		ctxLog.Error("Failed to open PDF", "error", err)
-		return nil, fmt.Errorf("failed to open PDF: %v", err)
+		return 0, fmt.Errorf("failed to open PDF: %v", err)
 	}
-	defer func(doc *fitz.Document) {
-		err := doc.Close()
-		if err != nil {
-			ctxLog.Error("Failed to close document", "error", err)
+	defer doc.Close()
+	return doc.NumPage(), nil
+}
+
+// RenderPages renders every page of a PDF to PNG in parallel, calling fn with
+// each page (0-based index) as soon as it is ready. fn is called concurrently
+// and in no particular order.
+//
+// go-fitz serializes rendering per document behind a mutex, so each worker
+// opens its own handle.
+func RenderPages(ctx context.Context, pdfPath string, numPages int, fn func(page int, png []byte) error) error {
+	ctxLog := log.WithRequestContext(ctx).
+		WithContext("method", "RenderPages").
+		WithContext("pdfPath", pdfPath)
+
+	workers := min(numPages, cap(renderSlots))
+	ctxLog.Debug("Rendering PDF pages", "pages", numPages, "workers", workers)
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	pages := make(chan int)
+	go func() {
+		defer close(pages)
+		for i := range numPages {
+			select {
+			case pages <- i:
+			case <-ctx.Done():
+				return
+			}
 		}
-	}(doc)
+	}()
 
-	numPages := doc.NumPage()
-	ctxLog.Debug("Converting PDF to images", "pages", numPages)
-
-	images := make([][]byte, 0, numPages)
-
-	for i := range numPages {
-		ctxLog.Debug("Converting page to image", "page", i+1)
-		img, err := doc.ImagePNG(i, renderDPI)
-		if err != nil {
-			ctxLog.Error("Failed to convert page to image", "page", i+1, "error", err)
-			return nil, fmt.Errorf("failed to convert page %d to image: %v", i, err)
-		}
-		images = append(images, img)
+	var (
+		wg       sync.WaitGroup
+		errOnce  sync.Once
+		firstErr error
+	)
+	fail := func(err error) {
+		errOnce.Do(func() { firstErr = err })
+		cancel()
 	}
 
-	ctxLog.Debug("PDF conversion completed", "images", len(images))
-	return images, nil
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			doc, err := fitz.New(pdfPath)
+			if err != nil {
+				fail(fmt.Errorf("failed to open PDF: %v", err))
+				return
+			}
+			defer func() {
+				if err := doc.Close(); err != nil {
+					ctxLog.Error("Failed to close document", "error", err)
+				}
+			}()
+
+			for i := range pages {
+				select {
+				case renderSlots <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				img, err := doc.ImagePNG(i, renderDPI)
+				<-renderSlots
+				if err != nil {
+					ctxLog.Error("Failed to convert page to image", "page", i+1, "error", err)
+					fail(fmt.Errorf("failed to convert page %d to image: %v", i, err))
+					return
+				}
+				ctxLog.Debug("Rendered page", "page", i+1)
+				if err := fn(i, img); err != nil {
+					fail(err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	if firstErr != nil {
+		return firstErr
+	}
+	// Non-nil if the caller cancelled and the page feeder stopped early
+	return ctx.Err()
 }

@@ -29,6 +29,7 @@ type Config struct {
 	GeminiModels        string `mapstructure:"GEMINI_MODELS"`
 	PicsurAPI           string `mapstructure:"PICSUR_API"`
 	PicsurURL           string `mapstructure:"PICSUR_URL"`
+	PicsurUploadURL     string `mapstructure:"PICSUR_UPLOAD_URL"`
 	ShortenerAPIKey     string `mapstructure:"SHORTENER_API_KEY"`
 	ShortenerURL        string `mapstructure:"SHORTENER_URL"`
 
@@ -55,6 +56,8 @@ func Load() (*Config, error) {
 	// Comma-separated Gemini models in order of preference; a ":thinking"
 	// suffix enables thinking for that model.
 	viper.SetDefault("GEMINI_MODELS", "gemini-3.1-flash-lite:thinking,gemini-2.5-flash-lite")
+	// Optional; needs a default so viper reads it from the environment
+	viper.SetDefault("PICSUR_UPLOAD_URL", "")
 	viper.SetDefault("DB_PORT", "5432")
 	viper.SetDefault("DB_SSL_MODE", "disable")
 	viper.SetDefault("LOG_LEVEL", "info")

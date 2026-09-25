@@ -195,6 +195,7 @@ The bot is configured using environment variables, loaded from a `.env` file via
 | `GEMINI_MODELS` | No | `gemini-3.1-flash-lite:thinking,gemini-2.5-flash-lite` | Comma-separated Gemini models in fallback order; append `:thinking` to enable thinking for a model |
 | `PICSUR_API` | Yes | | Picsur API key |
 | `PICSUR_URL` | Yes | | Picsur instance URL |
+| `PICSUR_UPLOAD_URL` | No | `PICSUR_URL` | Address the bot uploads to (e.g. a LAN address when Picsur runs on the same host); image links still use `PICSUR_URL` |
 | `SHORTENER_API_KEY` | Yes | | URL shortener API key |
 | `SHORTENER_URL` | Yes | | URL shortener base URL |
 | `DB_HOST` | Yes | | PostgreSQL host |
