@@ -170,8 +170,8 @@ func PDFPageCount(pdfPath string) (int, error) {
 // each page (0-based index) as soon as it is ready. fn is called concurrently
 // and in no particular order.
 //
-// go-fitz serializes rendering per document behind a mutex, so each worker
-// opens its own handle.
+// go-fitz serializes rendering per document behind a mutex, so each page is
+// rendered on its own handle.
 func RenderPages(ctx context.Context, pdfPath string, numPages int, fn func(page int, png []byte) error) error {
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "RenderPages").
@@ -210,28 +210,17 @@ func RenderPages(ctx context.Context, pdfPath string, numPages int, fn func(page
 		go func() {
 			defer wg.Done()
 
-			doc, err := fitz.New(pdfPath)
-			if err != nil {
-				fail(fmt.Errorf("failed to open PDF: %v", err))
-				return
-			}
-			defer func() {
-				if err := doc.Close(); err != nil {
-					ctxLog.Error("Failed to close document", "error", err)
-				}
-			}()
-
 			for i := range pages {
 				select {
 				case renderSlots <- struct{}{}:
 				case <-ctx.Done():
 					return
 				}
-				img, err := doc.ImagePNG(i, renderDPI)
+				img, err := renderPage(pdfPath, i)
 				<-renderSlots
 				if err != nil {
 					ctxLog.Error("Failed to convert page to image", "page", i+1, "error", err)
-					fail(fmt.Errorf("failed to convert page %d to image: %v", i, err))
+					fail(err)
 					return
 				}
 				ctxLog.Debug("Rendered page", "page", i+1)
@@ -249,4 +238,20 @@ func RenderPages(ctx context.Context, pdfPath string, numPages int, fn func(page
 	}
 	// Non-nil if the caller cancelled and the page feeder stopped early
 	return ctx.Err()
+}
+
+// renderPage renders one page on a fresh handle. Handles only live while a
+// render slot is held, so open handles are capped by renderSlots too; opening
+// is cheap next to rendering at 300 DPI.
+func renderPage(pdfPath string, page int) ([]byte, error) {
+	doc, err := fitz.New(pdfPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open PDF: %v", err)
+	}
+	defer doc.Close()
+	img, err := doc.ImagePNG(page, renderDPI)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert page %d to image: %v", page, err)
+	}
+	return img, nil
 }

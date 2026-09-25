@@ -25,8 +25,9 @@ type fakeThreads struct {
 	itemImages  map[string]string // carousel item container ID -> image URL
 	carousels   [][]string        // children of each carousel container, in creation order
 	publishes   int
-	replyTo     []string // reply_to_id of each created parent container
-	singleImage []string // image_url of each single-image (non-carousel-item) container
+	replyTo     []string        // reply_to_id of each created parent container
+	singleImage []string        // image_url of each single-image (non-carousel-item) container
+	failOnce    map[string]bool // carousel item image URLs whose first create fails
 }
 
 func (f *fakeThreads) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -44,6 +45,11 @@ func (f *fakeThreads) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		cid := id("c")
 		switch {
 		case r.Form.Get("is_carousel_item") == "true":
+			if img := r.Form.Get("image_url"); f.failOnce[img] {
+				delete(f.failOnce, img)
+				http.Error(w, `{"error":{"message":"boom","code":1}}`, http.StatusBadRequest)
+				return
+			}
 			f.itemImages[cid] = r.Form.Get("image_url")
 		case r.Form.Get("media_type") == "CAROUSEL":
 			f.carousels = append(f.carousels, strings.Split(r.Form.Get("children"), ","))
@@ -77,7 +83,7 @@ func fakePicsur(t *testing.T) *httptest.Server {
 }
 
 func newTestPoster(t *testing.T) (*Poster, *fakeThreads) {
-	ft := &fakeThreads{itemImages: map[string]string{}}
+	ft := &fakeThreads{itemImages: map[string]string{}, failOnce: map[string]bool{}}
 	threadsSrv := httptest.NewServer(ft)
 	t.Cleanup(threadsSrv.Close)
 	picsurSrv := fakePicsur(t)
@@ -160,5 +166,31 @@ func TestPrepareMediaMissingImage(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected an error when an image is never emitted")
+	}
+}
+
+// A container that fails to create while staging must not fail the document;
+// it is created when its chunk is posted.
+func TestContainerFailureRetriedAtPost(t *testing.T) {
+	const n = 41 // chunks of 20, 20, 1
+	p, ft := newTestPoster(t)
+	ctx := context.Background()
+	ft.failOnce["https://picsur.example.com/i/img25.png"] = true
+
+	media, err := p.PrepareMedia(ctx, n, emitAll(n))
+	if err != nil {
+		t.Fatalf("PrepareMedia: %v", err)
+	}
+	if media.containers[25] != "" {
+		t.Fatalf("container 25 = %q, want none after failed create", media.containers[25])
+	}
+	if err := p.Post(ctx, media, "Doc 1", time.Now(), "", ""); err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	if len(ft.carousels) != 2 || ft.itemImages[ft.carousels[1][5]] != media.urls[25] {
+		t.Errorf("second carousel child 6 = %q, want a container for %s", ft.carousels, media.urls[25])
+	}
+	if ft.publishes != 3 {
+		t.Errorf("publishes = %d, want 3", ft.publishes)
 	}
 }

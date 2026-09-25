@@ -365,10 +365,18 @@ func main() {
 			// URLs are each counted.
 			var skippedDocs, inProgressDocs []string
 
+			// The listing can repeat a document; handle each one once
+			seenThisCycle := make(map[string]bool, len(docs))
+
 			for _, doc := range docs {
+				key := storage.DocKey(doc.Title, doc.URL)
+				if seenThisCycle[key] {
+					continue
+				}
+				seenThisCycle[key] = true
+
 				// Skip already processed documents (checked before the recall
 				// handling so it covers recalled documents too)
-				key := storage.DocKey(doc.Title, doc.URL)
 				if alreadyProcessed[key] {
 					skippedDocs = append(skippedDocs, doc.Title)
 					continue

@@ -60,11 +60,11 @@ func New(accessToken, userID, clientID, clientSecret, redirectURI, picsurAPI, pi
 // containers already created for images that go into a carousel.
 type Media struct {
 	urls       []string
-	containers []string // carousel item container per image; "" for single-image chunks
+	containers []string // carousel item container per image; "" if none yet
 }
 
 // PrepareMedia uploads numImages images and creates their carousel item
-// containers. render must call emit once per index (0..numImages-1), from any
+// containers (best effort; missing ones are created when posting). render must call emit once per index (0..numImages-1), from any
 // goroutine in any order; each image is staged as soon as it is emitted.
 // Creating containers early lets Threads process them while the summary is
 // still generating, so publishing rarely has to wait on them. The first
@@ -140,10 +140,12 @@ func (p *Poster) stageImage(ctx context.Context, m *Media, i int, png []byte) er
 	if !inCarousel(i, len(m.urls), maxImagesPerPost) {
 		return nil
 	}
+	// Not fatal: postCarousel retries at post time, so a failure here only
+	// costs its reply chunk (if any), as under the loss-tolerant reply policy.
 	containerID, err := p.ThreadsClient.CreateMediaContainer(ctx, threads.MediaTypeImage, url, "")
 	if err != nil {
-		ctxLog.Error("Failed to create media container", "error", err)
-		return fmt.Errorf("failed to create media container for image %d: %v", i+1, err)
+		ctxLog.Warn("Failed to create media container; will retry when posting", "error", err)
+		return nil
 	}
 	m.containers[i] = string(containerID)
 	return nil
@@ -300,12 +302,28 @@ func (p *Poster) postSingleImage(ctx context.Context, imageURL, postText, replyT
 	return post, nil
 }
 
-// postCarousel posts a carousel of carousel item containers to Threads. If
+// postCarousel posts the images as a carousel to Threads, using the
+// pre-created carousel item containers and creating any that are missing. If
 // replyToID is non-empty, the carousel is posted as a reply to that post.
-func (p *Poster) postCarousel(ctx context.Context, containerIDs []string, postText, replyToID string) (*threads.Post, error) {
+func (p *Poster) postCarousel(ctx context.Context, imageURLs, preparedIDs []string, postText, replyToID string) (*threads.Post, error) {
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "postCarousel").
-		WithContext("imageCount", len(containerIDs))
+		WithContext("imageCount", len(imageURLs))
+
+	containerIDs := make([]string, len(imageURLs))
+	for i, imageURL := range imageURLs {
+		if preparedIDs[i] != "" {
+			containerIDs[i] = preparedIDs[i]
+			continue
+		}
+		ctxLog.Debug("Creating media container for carousel image", "index", i+1)
+		containerID, err := p.ThreadsClient.CreateMediaContainer(ctx, threads.MediaTypeImage, imageURL, "")
+		if err != nil {
+			ctxLog.Error("Failed to create media container", "index", i+1, "error", err)
+			return nil, fmt.Errorf("failed to create media container: %v", err)
+		}
+		containerIDs[i] = string(containerID)
+	}
 
 	ctxLog.Debug("Creating carousel post", "itemCount", len(containerIDs), "reply_to", replyToID)
 	post, err := p.ThreadsClient.CreateCarouselPost(ctx, &threads.CarouselPostContent{
@@ -332,7 +350,7 @@ func (p *Poster) postChunk(ctx context.Context, imageURLs, containerIDs []string
 	case n == 1:
 		return p.postSingleImage(ctx, imageURLs[0], text, replyToID)
 	case n >= 2 && n <= maxImagesPerPost:
-		return p.postCarousel(ctx, containerIDs, text, replyToID)
+		return p.postCarousel(ctx, imageURLs, containerIDs, text, replyToID)
 	default:
 		// Unreachable from Post (chunkURLs guarantees 1..maxImagesPerPost);
 		// retained as defense for any future direct caller.
