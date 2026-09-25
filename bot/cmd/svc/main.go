@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
@@ -172,7 +173,7 @@ func main() {
 	sc := scraper.New(cfg.FIAUrl)
 	appLog.Info("Scraper initialized successfully")
 
-	pstr, err := poster.New(cfg.ThreadsAccessToken, cfg.ThreadsUserID, cfg.ThreadsClientID, cfg.ThreadsClientSecret, cfg.ThreadsRedirectURI, cfg.PicsurAPI, cfg.PicsurURL, cfg.ShortenerAPIKey, cfg.ShortenerURL)
+	pstr, err := poster.New(cfg.ThreadsAccessToken, cfg.ThreadsUserID, cfg.ThreadsClientID, cfg.ThreadsClientSecret, cfg.ThreadsRedirectURI, cfg.PicsurAPI, cfg.PicsurURL, cfg.PicsurUploadURL, cfg.ShortenerAPIKey, cfg.ShortenerURL)
 	if err != nil {
 		appLog.Error("Failed to initialize poster", "error", err)
 		os.Exit(1)
@@ -278,9 +279,19 @@ func main() {
 		}
 	}()
 
+	// Workers outlive the cycle that started them so a slow document doesn't
+	// delay the next scrape. inFlight (DocKeys) stops double-starts.
+	var (
+		workers    sync.WaitGroup
+		semaphore  = make(chan struct{}, maxConcurrentProcessing)
+		inFlightMu sync.Mutex
+		inFlight   = make(map[string]bool)
+	)
+
 	// Start main processing loop in a goroutine
 	go func() {
 		defer func() {
+			workers.Wait()
 			done <- true
 		}()
 
@@ -329,6 +340,13 @@ func main() {
 
 			cycleLog.Info("Documents fetched", "count", len(docs))
 
+			// Snapshot before querying the DB: workers leave inFlight only after
+			// recording their document, so anything missing from the snapshot
+			// is either unstarted or already visible to FilterProcessed.
+			inFlightMu.Lock()
+			busy := maps.Clone(inFlight)
+			inFlightMu.Unlock()
+
 			// Check which documents are already processed in a single query.
 			// On error, skip the cycle rather than assume "not processed" —
 			// proceeding on a failed check could re-post documents.
@@ -342,20 +360,30 @@ func main() {
 				continue
 			}
 
-			// Create a worker pool with limited concurrency
-			var wg sync.WaitGroup
-			semaphore := make(chan struct{}, maxConcurrentProcessing)
-
 			// Track skipped documents for a single summary log line. A slice
 			// (not a title-keyed map) so same-title documents with different
 			// URLs are each counted.
-			var skippedDocs []string
+			var skippedDocs, inProgressDocs []string
+
+			// The listing can repeat a document; handle each one once
+			seenThisCycle := make(map[string]bool, len(docs))
 
 			for _, doc := range docs {
+				key := storage.DocKey(doc.Title, doc.URL)
+				if seenThisCycle[key] {
+					continue
+				}
+				seenThisCycle[key] = true
+
 				// Skip already processed documents (checked before the recall
 				// handling so it covers recalled documents too)
-				if alreadyProcessed[storage.DocKey(doc.Title, doc.URL)] {
+				if alreadyProcessed[key] {
 					skippedDocs = append(skippedDocs, doc.Title)
+					continue
+				}
+
+				if busy[key] {
+					inProgressDocs = append(inProgressDocs, doc.Title)
 					continue
 				}
 
@@ -389,12 +417,26 @@ func main() {
 					continue
 				}
 
-				// Limit concurrency using semaphore
-				semaphore <- struct{}{}
-				wg.Add(1)
+				inFlightMu.Lock()
+				inFlight[key] = true
+				inFlightMu.Unlock()
+				workers.Add(1)
 
-				go func(document *scraper.Document) {
-					defer wg.Done()
+				go func(document *scraper.Document, key string) {
+					defer workers.Done()
+					// Must run after processDocument (see snapshot comment)
+					defer func() {
+						inFlightMu.Lock()
+						delete(inFlight, key)
+						inFlightMu.Unlock()
+					}()
+
+					// Limit concurrency using semaphore
+					select {
+					case semaphore <- struct{}{}:
+					case <-bgCtx.Done():
+						return
+					}
 					defer func() { <-semaphore }()
 
 					// Each goroutine gets its own requestID so its logs can be
@@ -406,7 +448,7 @@ func main() {
 
 					docLog.Info("Processing new document", "title", document.Title)
 					processDocument(docCtx, document, sc, summarizer, pstr, store)
-				}(doc)
+				}(doc, key)
 			}
 
 			// Log skipped documents after the loop (if any)
@@ -414,8 +456,9 @@ func main() {
 				cycleLog.Info("Skipping already processed document(s)", "count", len(skippedDocs), "documents", skippedDocs)
 			}
 
-			// Wait for all goroutines to finish
-			wg.Wait()
+			if len(inProgressDocs) > 0 {
+				cycleLog.Info("Document(s) still being processed from an earlier cycle", "count", len(inProgressDocs), "documents", inProgressDocs)
+			}
 
 			cycleLog.Info("Sleeping before next check", "seconds", cfg.ScrapeInterval)
 			if !sleepOrShutdown(bgCtx, time.Duration(cfg.ScrapeInterval)*time.Second) {
@@ -460,7 +503,7 @@ func main() {
 }
 
 // processDocument handles all steps for a single document
-func processDocument(ctx context.Context, doc *scraper.Document, scraper *scraper.Scraper, summarizer *summary.Summarizer, poster *poster.Poster, store storage.StorageInterface) {
+func processDocument(ctx context.Context, doc *scraper.Document, sc *scraper.Scraper, summarizer *summary.Summarizer, pstr *poster.Poster, store storage.StorageInterface) {
 	// Get logger from context for this document
 	docLog := log.WithRequestContext(ctx).
 		WithContext("component", "document_processor")
@@ -480,7 +523,7 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 
 	// Download the document
 	docLog.Debug("Downloading document")
-	pdfPath, err := scraper.DownloadDocument(ctx, *doc, docDir)
+	pdfPath, err := sc.DownloadDocument(ctx, *doc, docDir)
 	if err != nil {
 		// Check if this is a recalled document
 		if strings.Contains(err.Error(), "document has been recalled") ||
@@ -489,7 +532,7 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 
 			// Post a text-only message about the recalled document
 			docLog.Info("Posting recalled document notice")
-			err = postRecalledDocumentNotice(ctx, poster, doc)
+			err = postRecalledDocumentNotice(ctx, pstr, doc)
 			if err != nil {
 				docLog.Error("Error posting recalled document notice", "error", err)
 				return
@@ -519,30 +562,48 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 	}
 	docLog.Info("Downloaded Document")
 
-	// Generate AI summary of the document by calling Gemini
-	docLog.Debug("Generating AI summary")
-	aiSummary, err := summarizer.GenerateSummary(ctx, pdfPath)
-	if err != nil {
-		docLog.Error("Error generating summary", "error", err)
-		// Continue with posting even if summary generation fails
-	}
+	// Summary, short link and media pipeline are independent; run them
+	// concurrently.
+	sideCtx, cancelSide := context.WithCancel(ctx)
+	defer cancelSide()
 
-	// Convert the PDF to images
+	var (
+		sideWG    sync.WaitGroup
+		aiSummary string
+		shortURL  string
+	)
+	sideWG.Add(2)
+	go func() {
+		defer sideWG.Done()
+		docLog.Debug("Generating AI summary")
+		s, err := summarizer.GenerateSummary(sideCtx, pdfPath)
+		if err != nil {
+			docLog.Error("Error generating summary", "error", err)
+			// Continue with posting even if summary generation fails
+			return
+		}
+		aiSummary = s
+	}()
+	go func() {
+		defer sideWG.Done()
+		shortURL = pstr.ShortenURL(sideCtx, utils.EncodeURL(doc.URL))
+	}()
+
 	docLog.Info("Converting PDF to images")
-	images, err := utils.ConvertToImages(ctx, pdfPath)
+	media, numPages, err := prepareMedia(ctx, pstr, pdfPath)
 	if err != nil {
 		docLog.Error("Error processing document", "error", err)
+		// Wait for the side work before the deferred cleanup deletes the PDF
+		cancelSide()
+		sideWG.Wait()
 		return
 	}
+	docLog.Info("Converted PDF to images and uploaded them", "pages", numPages)
 
-	docLog.Info("Converted PDF to images", "pages", len(images))
+	sideWG.Wait()
 
-	// Ensure that URL is properly encoded
-	documentURL := utils.EncodeURL(doc.URL)
-
-	// Attempt to post with the new format
 	docLog.Info("Posting document to Threads")
-	err = poster.Post(ctx, images, doc.Title, doc.Published, documentURL, aiSummary)
+	err = pstr.Post(ctx, media, doc.Title, doc.Published, shortURL, aiSummary)
 	if err != nil {
 		docLog.Error("Error posting to Threads", "error", err)
 		return
@@ -569,6 +630,19 @@ func processDocument(ctx context.Context, doc *scraper.Document, scraper *scrape
 	}
 
 	docLog.Info("Document processing complete")
+}
+
+// prepareMedia renders the PDF's pages and stages them for posting. Returns
+// the page count.
+func prepareMedia(ctx context.Context, pstr *poster.Poster, pdfPath string) (*poster.Media, int, error) {
+	numPages, err := utils.PDFPageCount(pdfPath)
+	if err != nil {
+		return nil, 0, err
+	}
+	media, err := pstr.PrepareMedia(ctx, numPages, func(ctx context.Context, emit func(int, []byte) error) error {
+		return utils.RenderPages(ctx, pdfPath, numPages, emit)
+	})
+	return media, numPages, err
 }
 
 // postRecalledDocumentNotice posts a text-only message about a recalled document

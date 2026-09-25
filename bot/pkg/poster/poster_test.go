@@ -66,6 +66,21 @@ func TestChunkURLs(t *testing.T) {
 	}
 }
 
+func TestInCarouselMatchesChunkURLs(t *testing.T) {
+	for n := 1; n <= 65; n++ {
+		chunks := chunkURLs(makeURLs(n), maxImagesPerPost)
+		i := 0
+		for _, c := range chunks {
+			for range c {
+				if got, want := inCarousel(i, n, maxImagesPerPost), len(c) >= 2; got != want {
+					t.Errorf("inCarousel(%d, %d) = %v, want %v", i, n, got, want)
+				}
+				i++
+			}
+		}
+	}
+}
+
 func makeURLs(n int) []string {
 	return makeURLsFrom(0, n)
 }

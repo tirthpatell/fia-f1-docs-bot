@@ -28,11 +28,19 @@ type Document struct {
 
 type Scraper struct {
 	baseURL string
+	// Shared so connections to fia.com stay warm between requests.
+	// Freshness comes from the cache-busting query and headers.
+	transport *http.Transport
+	client    *http.Client
 }
 
 func New(baseURL string) *Scraper {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConnsPerHost = 8
 	return &Scraper{
-		baseURL: baseURL,
+		baseURL:   baseURL,
+		transport: transport,
+		client:    &http.Client{Timeout: 30 * time.Second, Transport: transport},
 	}
 }
 
@@ -75,6 +83,7 @@ func (s *Scraper) FetchLatestDocuments(ctx context.Context, limit int) ([]*Docum
 
 	// Set AllowURLRevisit to true
 	c.AllowURLRevisit = true
+	c.WithTransport(s.transport)
 
 	// Add cache-busting query parameter
 	cacheBuster := fmt.Sprintf("?_cb=%d", time.Now().UnixNano())
@@ -179,16 +188,8 @@ func (s *Scraper) DownloadDocument(ctx context.Context, doc Document, directory 
 		return "", fmt.Errorf("document has been recalled: %s", doc.Title)
 	}
 
-	// Create a fresh HTTP client per download to avoid cached responses via keep-alive
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			DisableKeepAlives: true,
-		},
-	}
-
 	// Create a new request with cache-busting headers
-	req, err := http.NewRequest("GET", doc.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", doc.URL, nil)
 	if err != nil {
 		ctxLog.Error("Error creating request", "error", err)
 		return "", fmt.Errorf("error creating request: %v", err)
@@ -207,7 +208,7 @@ func (s *Scraper) DownloadDocument(ctx context.Context, doc Document, directory 
 
 	// Execute the request
 	ctxLog.Debug("Downloading document", "url", req.URL.String())
-	resp, err := client.Do(req)
+	resp, err := s.client.Do(req)
 	if err != nil {
 		ctxLog.Error("Error downloading document", "error", err)
 		return "", fmt.Errorf("error downloading document: %v", err)

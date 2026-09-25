@@ -33,7 +33,7 @@ type Poster struct {
 }
 
 // New creates a new Poster
-func New(accessToken, userID, clientID, clientSecret, redirectURI, picsurAPI, picsurURL, shortenerAPIKey, shortenerURL string) (*Poster, error) {
+func New(accessToken, userID, clientID, clientSecret, redirectURI, picsurAPI, picsurURL, picsurUploadURL, shortenerAPIKey, shortenerURL string) (*Poster, error) {
 	ctxLog := log.WithContext("method", "New")
 	ctxLog.Info("Creating new poster client")
 
@@ -51,15 +51,130 @@ func New(accessToken, userID, clientID, clientSecret, redirectURI, picsurAPI, pi
 
 	return &Poster{
 		ThreadsClient:   threadsClient,
-		PicsurClient:    utils.New(picsurAPI, picsurURL),
+		PicsurClient:    utils.New(picsurAPI, picsurURL, picsurUploadURL),
 		ShortenerClient: utils.NewShortenerClient(shortenerAPIKey, shortenerURL),
 	}, nil
 }
 
-// Post posts the images to Threads. When more than maxImagesPerPost images are
-// provided, the post is split into a chain: the first chunk becomes the root
-// post (with the AI summary text); each subsequent chunk is posted as an
-// image-only reply to the previous post in the chain.
+// Media is a document's uploaded page images, with Threads carousel item
+// containers already created for images that go into a carousel.
+type Media struct {
+	urls       []string
+	containers []string // carousel item container per image; "" if none yet
+}
+
+// PrepareMedia uploads numImages images and creates their carousel item
+// containers (best effort; missing ones are created when posting). render must call emit once per index (0..numImages-1), from any
+// goroutine in any order; each image is staged as soon as it is emitted.
+// Creating containers early lets Threads process them while the summary is
+// still generating, so publishing rarely has to wait on them. The first
+// failure cancels the context passed to render.
+func (p *Poster) PrepareMedia(ctx context.Context, numImages int, render func(ctx context.Context, emit func(i int, png []byte) error) error) (*Media, error) {
+	start := time.Now()
+	ctxLog := log.WithRequestContext(ctx).
+		WithContext("method", "PrepareMedia").
+		WithContext("imageCount", numImages)
+
+	if numImages <= 0 {
+		return &Media{}, nil // Post treats empty media as nothing to do
+	}
+
+	m := &Media{
+		urls:       make([]string, numImages),
+		containers: make([]string, numImages),
+	}
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxConcurrentUploads)
+
+	renderErr := render(gctx, func(i int, png []byte) error {
+		if i < 0 || i >= numImages {
+			return fmt.Errorf("image index %d out of range [0, %d)", i, numImages)
+		}
+		// Blocks at the limit, throttling rendering to the upload rate
+		g.Go(func() error { return p.stageImage(gctx, m, i, png) })
+		return nil
+	})
+	stageErr := g.Wait()
+
+	// A staging failure cancels rendering, so it is the root cause
+	err := stageErr
+	if err == nil {
+		err = renderErr
+	}
+	if err == nil {
+		for i, url := range m.urls {
+			if url == "" {
+				err = fmt.Errorf("image %d was never rendered", i+1)
+				break
+			}
+		}
+	}
+	if err != nil {
+		ctxLog.ErrorWithType("Failed to prepare media", err,
+			"duration_ms", time.Since(start).Milliseconds())
+		return nil, err
+	}
+
+	ctxLog.Info("Media prepared",
+		"count", numImages,
+		"duration_ms", time.Since(start).Milliseconds())
+	return m, nil
+}
+
+// stageImage uploads image i and, if it goes into a carousel, creates its
+// carousel item container.
+func (p *Poster) stageImage(ctx context.Context, m *Media, i int, png []byte) error {
+	ctxLog := log.WithRequestContext(ctx).
+		WithContext("method", "stageImage").
+		WithContext("index", i+1)
+
+	url, err := p.PicsurClient.UploadImage(ctx, png)
+	if err != nil {
+		ctxLog.Error("Failed to upload image", "error", err)
+		return fmt.Errorf("failed to upload image %d: %v", i+1, err)
+	}
+	m.urls[i] = url
+	ctxLog.Debug("Uploaded image", "total", len(m.urls))
+
+	if !inCarousel(i, len(m.urls), maxImagesPerPost) {
+		return nil
+	}
+	// Not fatal: postCarousel retries at post time, so a failure here only
+	// costs its reply chunk (if any), as under the loss-tolerant reply policy.
+	containerID, err := p.ThreadsClient.CreateMediaContainer(ctx, threads.MediaTypeImage, url, "")
+	if err != nil {
+		ctxLog.Warn("Failed to create media container; will retry when posting", "error", err)
+		return nil
+	}
+	m.containers[i] = string(containerID)
+	return nil
+}
+
+// ShortenURL returns the shortened url, or "" if url is empty or shortening
+// fails.
+func (p *Poster) ShortenURL(ctx context.Context, url string) string {
+	if url == "" {
+		return ""
+	}
+	ctxLog := log.WithRequestContext(ctx).
+		WithContext("method", "ShortenURL")
+
+	ctxLog.Debug("Shortening document URL")
+	shortenedURL, err := p.ShortenerClient.ShortenURL(ctx, url)
+	if err != nil {
+		ctxLog.Error("Failed to shorten URL", "error", err)
+		ctxLog.Warn("Continuing without shortened URL")
+		return ""
+	}
+	return shortenedURL
+}
+
+// Post publishes prepared media to Threads. When there are more than
+// maxImagesPerPost images, the post is split into a chain: the first chunk
+// becomes the root post (with the AI summary text); each subsequent chunk is
+// posted as an image-only reply to the previous post in the chain. An empty
+// shortURL omits the link.
 //
 // Failure policy:
 //   - Root post failure: returns the error; caller skips marking the document
@@ -68,54 +183,32 @@ func New(accessToken, userID, clientID, clientSecret, redirectURI, picsurAPI, pi
 //     index, then returns nil. The root post and any earlier replies remain
 //     published; the document is marked processed so we don't re-publish the
 //     root on the next cycle. Some tail images may be lost.
-func (p *Poster) Post(ctx context.Context, images [][]byte, title string, publishTime time.Time, documentURL, aiSummary string) error {
+func (p *Poster) Post(ctx context.Context, media *Media, title string, publishTime time.Time, shortURL, aiSummary string) error {
 	start := time.Now()
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "Post")
 
-	if len(images) == 0 {
+	if media == nil || len(media.urls) == 0 {
 		ctxLog.Warn("Post called with zero images; nothing to do")
 		return nil
 	}
 
-	// Upload images to Picsur
-	ctxLog.Debug("Uploading images to Picsur", "count", len(images))
-	uploadStart := time.Now()
-	imageURLs, err := p.uploadImages(ctx, images)
-	uploadDuration := time.Since(uploadStart)
-
-	if err != nil {
-		ctxLog.ErrorWithType("Failed to upload images", err,
-			"upload_duration_ms", uploadDuration.Milliseconds())
-		return err
-	}
-
-	ctxLog.Info("Images uploaded successfully",
-		"count", len(imageURLs),
-		"upload_duration_ms", uploadDuration.Milliseconds())
-
 	// Format the text for the root post
-	ctxLog.Debug("Formatting post text")
-	postText, err := p.formatPostText(ctx, title, publishTime, documentURL, aiSummary)
-	if err != nil {
-		ctxLog.ErrorWithType("Failed to format post text", err)
-		return err
-	}
+	postText := formatPostText(title, publishTime, shortURL, aiSummary)
 	ctxLog.Debug("Post character count", "chars", utf8.RuneCountInString(postText))
 
 	// Partition images into chunks of ≤ maxImagesPerPost
-	chunks := chunkURLs(imageURLs, maxImagesPerPost)
+	chunks := chunkURLs(media.urls, maxImagesPerPost)
+	containerChunks := chunkURLs(media.containers, maxImagesPerPost)
 	ctxLog.Info("Posting to Threads",
-		"image_count", len(imageURLs),
+		"image_count", len(media.urls),
 		"chunk_count", len(chunks))
 
 	// Post the root chunk
-	postStart := time.Now()
-	rootPost, err := p.postChunk(ctx, chunks[0], postText, "")
+	rootPost, err := p.postChunk(ctx, chunks[0], containerChunks[0], postText, "")
 	if err != nil {
 		ctxLog.ErrorWithType("Failed to post root chunk to Threads", err,
 			"chunk_size", len(chunks[0]),
-			"upload_duration_ms", uploadDuration.Milliseconds(),
 			"total_duration_ms", time.Since(start).Milliseconds())
 		return err
 	}
@@ -125,7 +218,7 @@ func (p *Poster) Post(ctx context.Context, images [][]byte, title string, publis
 	// the root post is chunk 1, the first reply is chunk 2, etc.
 	prevID := rootPost.ID
 	for i := 1; i < len(chunks); i++ {
-		replyPost, replyErr := p.postChunk(ctx, chunks[i], "", prevID)
+		replyPost, replyErr := p.postChunk(ctx, chunks[i], containerChunks[i], "", prevID)
 		if replyErr != nil {
 			// Loss-tolerant: log loudly, stop the chain, but do not fail the
 			// whole Post() call. Caller will mark the document as processed so
@@ -147,12 +240,9 @@ func (p *Poster) Post(ctx context.Context, images [][]byte, title string, publis
 		prevID = replyPost.ID
 	}
 
-	totalDuration := time.Since(start)
 	ctxLog.Info("Post to Threads completed",
 		"chunks_total", len(chunks),
-		"posting_duration_ms", time.Since(postStart).Milliseconds(),
-		"upload_duration_ms", uploadDuration.Milliseconds(),
-		"total_duration_ms", totalDuration.Milliseconds())
+		"posting_duration_ms", time.Since(start).Milliseconds())
 
 	return nil
 }
@@ -189,40 +279,6 @@ func (p *Poster) PostTextOnly(ctx context.Context, text string) error {
 	return nil
 }
 
-// uploadImages uploads PNG-encoded images to Picsur in parallel (bounded by
-// maxConcurrentUploads) and returns their URLs in the original order. The
-// first upload error cancels the remaining uploads via the errgroup context.
-func (p *Poster) uploadImages(ctx context.Context, images [][]byte) ([]string, error) {
-	ctxLog := log.WithRequestContext(ctx).
-		WithContext("method", "uploadImages").
-		WithContext("imageCount", len(images))
-
-	imageURLs := make([]string, len(images))
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(maxConcurrentUploads)
-
-	for i, img := range images {
-		g.Go(func() error {
-			ctxLog.Debug("Uploading image", "index", i+1)
-			url, err := p.PicsurClient.UploadImage(gctx, img)
-			if err != nil {
-				ctxLog.Error("Failed to upload image", "index", i+1, "error", err)
-				return fmt.Errorf("failed to upload image %d: %v", i+1, err)
-			}
-			imageURLs[i] = url
-			ctxLog.Debug("Uploaded image", "index", i+1, "total", len(images))
-			return nil
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-
-	ctxLog.Info("All images uploaded successfully", "count", len(imageURLs))
-	return imageURLs, nil
-}
-
 // postSingleImage posts a single image to Threads. If replyToID is non-empty,
 // the post is created as a reply to that post.
 func (p *Poster) postSingleImage(ctx context.Context, imageURL, postText, replyToID string) (*threads.Post, error) {
@@ -246,23 +302,27 @@ func (p *Poster) postSingleImage(ctx context.Context, imageURL, postText, replyT
 	return post, nil
 }
 
-// postCarousel posts multiple images as a carousel to Threads. If replyToID
-// is non-empty, the carousel is posted as a reply to that post.
-func (p *Poster) postCarousel(ctx context.Context, imageURLs []string, postText, replyToID string) (*threads.Post, error) {
+// postCarousel posts the images as a carousel to Threads, using the
+// pre-created carousel item containers and creating any that are missing. If
+// replyToID is non-empty, the carousel is posted as a reply to that post.
+func (p *Poster) postCarousel(ctx context.Context, imageURLs, preparedIDs []string, postText, replyToID string) (*threads.Post, error) {
 	ctxLog := log.WithRequestContext(ctx).
 		WithContext("method", "postCarousel").
 		WithContext("imageCount", len(imageURLs))
 
-	var containerIDs []string
-
+	containerIDs := make([]string, len(imageURLs))
 	for i, imageURL := range imageURLs {
+		if preparedIDs[i] != "" {
+			containerIDs[i] = preparedIDs[i]
+			continue
+		}
 		ctxLog.Debug("Creating media container for carousel image", "index", i+1)
 		containerID, err := p.ThreadsClient.CreateMediaContainer(ctx, threads.MediaTypeImage, imageURL, "")
 		if err != nil {
 			ctxLog.Error("Failed to create media container", "index", i+1, "error", err)
 			return nil, fmt.Errorf("failed to create media container: %v", err)
 		}
-		containerIDs = append(containerIDs, string(containerID))
+		containerIDs[i] = string(containerID)
 	}
 
 	ctxLog.Debug("Creating carousel post", "itemCount", len(containerIDs), "reply_to", replyToID)
@@ -281,15 +341,16 @@ func (p *Poster) postCarousel(ctx context.Context, imageURLs []string, postText,
 	return post, nil
 }
 
-// postChunk posts a single chunk of 1..maxImagesPerPost image URLs and returns
-// the resulting post. text is attached to the post (use "" for image-only
-// replies). replyToID, when non-empty, makes this a reply to that post.
-func (p *Poster) postChunk(ctx context.Context, imageURLs []string, text, replyToID string) (*threads.Post, error) {
+// postChunk posts a single chunk of 1..maxImagesPerPost images (URLs plus
+// matching carousel item containers) and returns the resulting post. text is
+// attached to the post (use "" for image-only replies). replyToID, when
+// non-empty, makes this a reply to that post.
+func (p *Poster) postChunk(ctx context.Context, imageURLs, containerIDs []string, text, replyToID string) (*threads.Post, error) {
 	switch n := len(imageURLs); {
 	case n == 1:
 		return p.postSingleImage(ctx, imageURLs[0], text, replyToID)
 	case n >= 2 && n <= maxImagesPerPost:
-		return p.postCarousel(ctx, imageURLs, text, replyToID)
+		return p.postCarousel(ctx, imageURLs, containerIDs, text, replyToID)
 	default:
 		// Unreachable from Post (chunkURLs guarantees 1..maxImagesPerPost);
 		// retained as defense for any future direct caller.
@@ -297,25 +358,9 @@ func (p *Poster) postChunk(ctx context.Context, imageURLs []string, text, replyT
 	}
 }
 
-// formatPostText formats the text for a post
-func (p *Poster) formatPostText(ctx context.Context, title string, publishTime time.Time, documentURL, aiSummary string) (string, error) {
-	ctxLog := log.WithRequestContext(ctx).
-		WithContext("method", "formatPostText")
-
-	// Shorten the document URL if provided
-	var shortenedURL string
-	var err error
-
-	if documentURL != "" {
-		ctxLog.Debug("Shortening document URL")
-		shortenedURL, err = p.ShortenerClient.ShortenURL(ctx, documentURL)
-		if err != nil {
-			ctxLog.Error("Failed to shorten URL", "error", err)
-			// Continue without the shortened URL
-			ctxLog.Warn("Continuing without shortened URL")
-		}
-	}
-
+// formatPostText formats the text for a post. An empty shortenedURL omits
+// the link.
+func formatPostText(title string, publishTime time.Time, shortenedURL, aiSummary string) string {
 	// Create the base text with or without the shortened URL
 	var baseText string
 	if shortenedURL != "" {
@@ -340,7 +385,7 @@ func (p *Poster) formatPostText(ctx context.Context, title string, publishTime t
 
 	// Final guard: an unusually long title can push baseText itself past the
 	// limit, so truncate the assembled text as a whole.
-	return truncateText(text, maxCharacterLimit), nil
+	return truncateText(text, maxCharacterLimit)
 }
 
 // truncateText truncates text to the specified limit (counted in runes, since
@@ -376,6 +421,13 @@ func topicTagForReply(replyToID string) string {
 		return TopicTag
 	}
 	return ""
+}
+
+// inCarousel reports whether image i of n lands in a chunk of two or more
+// images when split by chunkURLs.
+func inCarousel(i, n, size int) bool {
+	chunkStart := i / size * size
+	return min(chunkStart+size, n)-chunkStart >= 2
 }
 
 // chunkURLs partitions urls into consecutive slices of length ≤ size.

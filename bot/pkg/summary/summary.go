@@ -121,7 +121,11 @@ func (s *Summarizer) GenerateSummary(ctx context.Context, pdfPath string) (strin
 		ctxLog.Warn("Failed to generate summary with model", "model", model.name, "error", err)
 
 		// Add a small delay before trying the next model
-		time.Sleep(500 * time.Millisecond)
+		select {
+		case <-time.After(500 * time.Millisecond):
+		case <-ctx.Done():
+			return "", fmt.Errorf("summary generation cancelled, last error: %w", lastError)
+		}
 	}
 
 	ctxLog.Error("All models failed to generate summary", "lastError", lastError)

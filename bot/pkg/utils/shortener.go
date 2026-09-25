@@ -16,6 +16,8 @@ type ShortenerClient struct {
 	BaseURL string
 }
 
+var shortenerHTTPClient = NewHTTPClient(30 * time.Second)
+
 // NewShortenerClient creates a new ShortenerClient
 func NewShortenerClient(apiKey, baseURL string) *ShortenerClient {
 	ctxLog := log.WithContext("method", "NewShortenerClient")
@@ -60,7 +62,7 @@ func (c *ShortenerClient) ShortenURL(ctx context.Context, longURL string) (strin
 	// Create request
 	endpoint := c.BaseURL + "/api/shorten"
 	ctxLog.Debug("Creating request", "endpoint", endpoint)
-	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
 		ctxLog.Error("Failed to create request", "error", err)
 		return "", fmt.Errorf("failed to create request: %v", err)
@@ -72,8 +74,7 @@ func (c *ShortenerClient) ShortenURL(ctx context.Context, longURL string) (strin
 
 	// Send request
 	ctxLog.Debug("Sending URL shortening request")
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := shortenerHTTPClient.Do(req)
 	if err != nil {
 		ctxLog.Error("Failed to send request", "error", err)
 		return "", fmt.Errorf("failed to send request: %v", err)
